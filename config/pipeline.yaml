@@ -1,0 +1,28 @@
+project:
+  name: chicago-food-inspections-data-quality
+
+source:
+  dataset: chicago_food_inspections
+  start_year: 2019
+  end_year: 2025
+
+paths:
+  incoming: data/incoming
+  archive: data/archive
+  curated: data/curated
+  quarantine: data/quarantine
+  reports: data/reports
+  state: data/state
+  logs: logs
+
+ingestion:
+  file_pattern: "food_inspections_*.csv"
+  encoding: utf-8
+  delimiter: ","
+  hash_algorithm: sha256
+
+output:
+  format: parquet
+  compression: snappy
+  partition_by:
+    - inspection_year
