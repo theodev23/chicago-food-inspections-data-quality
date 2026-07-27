@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chicago-food-inspections-data-quality"
+version = "0.1.0"
+description = "An incremental Python ETL pipeline for profiling, cleaning, validating, and publishing Chicago food inspection data."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+authors = [
+    { name = "Théo Devarenne" }
+]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

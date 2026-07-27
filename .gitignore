@@ -1,0 +1,45 @@
+# macOS
+.DS_Store
+
+# Python virtual environment
+.venv/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and quality tool caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Environment variables and secrets
+.env
+.env.local
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Pipeline data
+data/incoming/*
+data/archive/*
+data/curated/*
+data/quarantine/*
+data/reports/*
+data/state/*
+
+# Keep empty directory placeholders
+!data/incoming/.gitkeep
+!data/archive/.gitkeep
+!data/curated/.gitkeep
+!data/quarantine/.gitkeep
+!data/reports/.gitkeep
+!data/state/.gitkeep
+
+# Editor files
+.vscode/
+.idea/
