@@ -43,3 +43,8 @@ data/state/*
 # Editor files
 .vscode/
 .idea/
+
+# Python packaging artifacts
+build/
+dist/
+*.egg-info/
