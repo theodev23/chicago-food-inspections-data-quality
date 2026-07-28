@@ -1,9 +1,13 @@
 """Validate source records and describe row-level quality issues."""
 
+import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pandas as pd
+
+_INT64_MAX_TEXT = "9223372036854775807"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,3 +165,122 @@ def find_inspection_date_issues(
             )
 
     return tuple(issues)
+
+
+def find_inspection_id_issues(
+    data: pd.DataFrame,
+    *,
+    primary_key: str = "inspection_id",
+    minimum: int = 1,
+) -> tuple[RecordIssue, ...]:
+    """Find missing, malformed, invalid, or duplicated inspection IDs.
+
+    Args:
+        data: Raw source records.
+        primary_key: Source column identifying each inspection.
+        minimum: Lowest numeric identifier accepted by the contract.
+
+    Returns:
+        Immutable issues ordered by their source CSV row number.
+
+    Raises:
+        RecordValidationError: If the validation parameters or schema
+            prevent inspection ID validation.
+    """
+    if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 1:
+        raise RecordValidationError(
+            f"Inspection ID minimum must be a positive integer: {minimum}"
+        )
+
+    if primary_key not in data.columns:
+        raise RecordValidationError(
+            f"Data is missing required validation column: {primary_key}"
+        )
+
+    values = data[primary_key].astype("string").reset_index(drop=True)
+
+    parsed_keys: list[int | None] = [None] * len(data)
+    row_issues: list[RecordIssue | None] = [None] * len(data)
+
+    for position, value in enumerate(values):
+        source_row_number = position + 2
+        raw_value = "" if pd.isna(value) else str(value)
+
+        if not raw_value.strip():
+            row_issues[position] = RecordIssue(
+                source_row_number=source_row_number,
+                inspection_id=raw_value,
+                rule_id="inspection_id_required",
+                column=primary_key,
+                value=raw_value,
+                message="Inspection ID is required.",
+            )
+            continue
+
+        if re.fullmatch(r"[0-9]+", raw_value) is None:
+            row_issues[position] = RecordIssue(
+                source_row_number=source_row_number,
+                inspection_id=raw_value,
+                rule_id="inspection_id_format",
+                column=primary_key,
+                value=raw_value,
+                message="Inspection ID must contain digits only.",
+            )
+            continue
+
+        canonical_digits = raw_value.lstrip("0") or "0"
+
+        exceeds_int64 = len(canonical_digits) > len(_INT64_MAX_TEXT) or (
+            len(canonical_digits) == len(_INT64_MAX_TEXT)
+            and canonical_digits > _INT64_MAX_TEXT
+        )
+
+        if exceeds_int64:
+            row_issues[position] = RecordIssue(
+                source_row_number=source_row_number,
+                inspection_id=raw_value,
+                rule_id="inspection_id_int64",
+                column=primary_key,
+                value=raw_value,
+                message="Inspection ID cannot be represented as int64.",
+            )
+            continue
+
+        numeric_value = int(canonical_digits)
+
+        if numeric_value < minimum:
+            row_issues[position] = RecordIssue(
+                source_row_number=source_row_number,
+                inspection_id=raw_value,
+                rule_id="inspection_id_minimum",
+                column=primary_key,
+                value=raw_value,
+                message=(f"Inspection ID must be greater than or equal to {minimum}."),
+            )
+            continue
+
+        parsed_keys[position] = numeric_value
+
+    key_counts = Counter(key for key in parsed_keys if key is not None)
+
+    for position, numeric_value in enumerate(parsed_keys):
+        if row_issues[position] is not None:
+            continue
+
+        if numeric_value is None or key_counts[numeric_value] == 1:
+            continue
+
+        raw_value = str(values.iat[position])
+
+        row_issues[position] = RecordIssue(
+            source_row_number=position + 2,
+            inspection_id=raw_value,
+            rule_id="inspection_id_unique",
+            column=primary_key,
+            value=raw_value,
+            message=(
+                f"Inspection ID {numeric_value} appears more than once in the batch."
+            ),
+        )
+
+    return tuple(issue for issue in row_issues if issue is not None)
