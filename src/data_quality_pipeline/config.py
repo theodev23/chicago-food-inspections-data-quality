@@ -44,18 +44,12 @@ def load_config(config_path: str | Path) -> ConfigData:
         with path.open(encoding="utf-8") as config_file:
             loaded_config = yaml.safe_load(config_file)
     except yaml.YAMLError as exc:
-        raise ConfigurationError(
-            f"Invalid YAML configuration file: {path}"
-        ) from exc
+        raise ConfigurationError(f"Invalid YAML configuration file: {path}") from exc
     except OSError as exc:
-        raise ConfigurationError(
-            f"Unable to read configuration file: {path}"
-        ) from exc
+        raise ConfigurationError(f"Unable to read configuration file: {path}") from exc
 
     if not isinstance(loaded_config, dict):
-        raise ConfigurationError(
-            "The configuration root must be a YAML mapping."
-        )
+        raise ConfigurationError("The configuration root must be a YAML mapping.")
 
     missing_sections = _REQUIRED_SECTIONS.difference(loaded_config)
 
