@@ -9,6 +9,7 @@ from data_quality_pipeline.validation import (
     RecordIssue,
     RecordValidationError,
     find_inspection_date_issues,
+    find_inspection_id_issues,
 )
 
 
@@ -251,3 +252,180 @@ def test_find_inspection_date_issues_rejects_missing_columns() -> None:
 
     assert "inspection_id" in message
     assert "inspection_date" in message
+
+
+def test_find_inspection_id_issues_returns_empty_tuple_for_valid_ids() -> None:
+    """Valid unique identifiers should produce no issues."""
+    data = _frame(
+        [
+            {"inspection_id": "10"},
+            {"inspection_id": "11"},
+            {"inspection_id": "9223372036854775807"},
+        ]
+    )
+
+    issues = find_inspection_id_issues(
+        data,
+        minimum=10,
+    )
+
+    assert issues == ()
+
+
+def test_find_inspection_id_issues_classifies_invalid_values() -> None:
+    """Missing, malformed, overflowing, and low IDs should be distinguished."""
+    data = _frame(
+        [
+            {"inspection_id": ""},
+            {"inspection_id": "12A"},
+            {"inspection_id": "9223372036854775808"},
+            {"inspection_id": "0"},
+            {"inspection_id": "15"},
+        ]
+    )
+    data.index = [50, 60, 70, 80, 90]
+
+    issues = find_inspection_id_issues(
+        data,
+        minimum=1,
+    )
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="",
+            rule_id="inspection_id_required",
+            column="inspection_id",
+            value="",
+            message="Inspection ID is required.",
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="12A",
+            rule_id="inspection_id_format",
+            column="inspection_id",
+            value="12A",
+            message="Inspection ID must contain digits only.",
+        ),
+        RecordIssue(
+            source_row_number=4,
+            inspection_id="9223372036854775808",
+            rule_id="inspection_id_int64",
+            column="inspection_id",
+            value="9223372036854775808",
+            message="Inspection ID cannot be represented as int64.",
+        ),
+        RecordIssue(
+            source_row_number=5,
+            inspection_id="0",
+            rule_id="inspection_id_minimum",
+            column="inspection_id",
+            value="0",
+            message="Inspection ID must be greater than or equal to 1.",
+        ),
+    )
+
+
+def test_find_inspection_id_issues_flags_all_canonical_duplicates() -> None:
+    """Equivalent numeric IDs should all be reported as duplicates."""
+    data = _frame(
+        [
+            {"inspection_id": "001"},
+            {"inspection_id": "1"},
+            {"inspection_id": "2"},
+            {"inspection_id": "002"},
+            {"inspection_id": "3"},
+        ]
+    )
+
+    issues = find_inspection_id_issues(data)
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="001",
+            rule_id="inspection_id_unique",
+            column="inspection_id",
+            value="001",
+            message="Inspection ID 1 appears more than once in the batch.",
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="1",
+            rule_id="inspection_id_unique",
+            column="inspection_id",
+            value="1",
+            message="Inspection ID 1 appears more than once in the batch.",
+        ),
+        RecordIssue(
+            source_row_number=4,
+            inspection_id="2",
+            rule_id="inspection_id_unique",
+            column="inspection_id",
+            value="2",
+            message="Inspection ID 2 appears more than once in the batch.",
+        ),
+        RecordIssue(
+            source_row_number=5,
+            inspection_id="002",
+            rule_id="inspection_id_unique",
+            column="inspection_id",
+            value="002",
+            message="Inspection ID 2 appears more than once in the batch.",
+        ),
+    )
+
+
+def test_find_inspection_id_issues_supports_custom_primary_key() -> None:
+    """The validator should support the primary key declared by a contract."""
+    data = _frame(
+        [
+            {"custom_id": "10"},
+            {"custom_id": "11"},
+        ]
+    )
+
+    issues = find_inspection_id_issues(
+        data,
+        primary_key="custom_id",
+        minimum=10,
+    )
+
+    assert issues == ()
+
+
+@pytest.mark.parametrize(
+    "minimum",
+    [
+        True,
+        0,
+        -1,
+        1.0,
+        "1",
+    ],
+)
+def test_find_inspection_id_issues_rejects_invalid_minimum(
+    minimum: object,
+) -> None:
+    """The configured minimum must be a positive integer."""
+    data = _frame([{"inspection_id": "1"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Inspection ID minimum must be a positive integer",
+    ):
+        find_inspection_id_issues(
+            data,
+            minimum=minimum,
+        )
+
+
+def test_find_inspection_id_issues_rejects_missing_primary_key() -> None:
+    """The configured primary-key column must exist."""
+    data = _frame([{"other_column": "1"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Data is missing required validation column: inspection_id",
+    ):
+        find_inspection_id_issues(data)
