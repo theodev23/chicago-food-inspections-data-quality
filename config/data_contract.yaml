@@ -1,0 +1,203 @@
+contract:
+  name: chicago_food_inspections
+  version: "1.0.0"
+  primary_key: inspection_id
+  source_format: csv
+
+source_schema:
+  expected_columns:
+    - inspection_id
+    - dba_name
+    - aka_name
+    - license_
+    - facility_type
+    - risk
+    - address
+    - city
+    - state
+    - zip
+    - inspection_date
+    - inspection_type
+    - results
+    - violations
+    - latitude
+    - longitude
+    - location
+
+columns:
+  inspection_id:
+    target_name: inspection_id
+    target_type: int64
+    nullable: false
+    validations:
+      format: digits
+      minimum: 1
+      unique: true
+
+  dba_name:
+    target_name: dba_name
+    target_type: string
+    nullable: false
+    cleaning:
+      - trim_whitespace
+      - collapse_internal_whitespace
+
+  aka_name:
+    target_name: aka_name
+    target_type: string
+    nullable: true
+    cleaning:
+      - trim_whitespace
+      - collapse_internal_whitespace
+
+  license_:
+    target_name: license_number
+    target_type: Int64
+    nullable: true
+    cleaning:
+      zero_as_null: true
+    validations:
+      format_when_present: digits
+
+  facility_type:
+    target_name: facility_type
+    target_type: string
+    nullable: true
+    cleaning:
+      - trim_whitespace
+      - collapse_internal_whitespace
+
+  risk:
+    target_name: risk
+    target_type: string
+    nullable: true
+    allowed_values:
+      - Risk 1 (High)
+      - Risk 2 (Medium)
+      - Risk 3 (Low)
+      - All
+    unknown_value_severity: warning
+
+  address:
+    target_name: address
+    target_type: string
+    nullable: false
+    cleaning:
+      - trim_whitespace
+      - collapse_internal_whitespace
+
+  city:
+    target_name: city
+    target_type: string
+    nullable: true
+    cleaning:
+      - trim_whitespace
+      - collapse_internal_whitespace
+      - uppercase
+
+  state:
+    target_name: state
+    target_type: string
+    nullable: true
+    cleaning:
+      - trim_whitespace
+      - uppercase
+    validations:
+      pattern: "^[A-Z]{2}$"
+
+  zip:
+    target_name: zip_code
+    target_type: string
+    nullable: true
+    cleaning:
+      - trim_whitespace
+    validations:
+      pattern: "^[0-9]{5}$"
+
+  inspection_date:
+    target_name: inspection_date
+    target_type: date
+    nullable: false
+    accepted_formats:
+      - "%Y-%m-%dT%H:%M:%S.%f"
+
+  inspection_type:
+    target_name: inspection_type
+    target_type: string
+    nullable: false
+    cleaning:
+      - trim_whitespace
+      - collapse_internal_whitespace
+    unknown_value_severity: warning
+
+  results:
+    target_name: inspection_result
+    target_type: string
+    nullable: false
+    allowed_values:
+      - Pass
+      - Pass w/ Conditions
+      - Fail
+      - Out of Business
+      - No Entry
+      - Not Ready
+      - Business Not Located
+    unknown_value_severity: error
+
+  violations:
+    target_name: violations
+    target_type: string
+    nullable: true
+    cleaning:
+      - trim_whitespace
+
+  latitude:
+    target_name: latitude
+    target_type: float64
+    nullable: true
+    validations:
+      minimum: -90
+      maximum: 90
+
+  longitude:
+    target_name: longitude
+    target_type: float64
+    nullable: true
+    validations:
+      minimum: -180
+      maximum: 180
+
+  location:
+    target_name: location
+    target_type: string
+    nullable: true
+    publish: false
+
+record_rules:
+  - id: coordinate_pair_consistency
+    description: Latitude and longitude must both be present or both be null.
+    severity: error
+    action: quarantine
+
+  - id: exact_duplicate_record
+    description: Records identical on all source columns except inspection_id are duplicates.
+    severity: error
+    action: quarantine_duplicate
+    keep: lowest_inspection_id
+    reference_column: duplicate_of_inspection_id
+
+  - id: inspection_year_matches_filename
+    description: Every inspection date must match the year encoded in the filename.
+    severity: error
+    action: quarantine
+
+batch_rules:
+  - id: expected_columns
+    description: The incoming CSV must contain exactly the documented source columns.
+    severity: error
+    action: fail_batch
+
+  - id: non_empty_file
+    description: An incoming CSV must contain at least one data row.
+    severity: error
+    action: fail_batch
