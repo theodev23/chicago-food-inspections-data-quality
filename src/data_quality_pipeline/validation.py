@@ -4,6 +4,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from math import isfinite
 
 import pandas as pd
 
@@ -380,3 +381,198 @@ def find_inspection_result_issues(
             )
 
     return tuple(issues)
+
+
+def find_coordinate_issues(
+    data: pd.DataFrame,
+    *,
+    primary_key: str = "inspection_id",
+    latitude_column: str = "latitude",
+    longitude_column: str = "longitude",
+    latitude_minimum: float = -90,
+    latitude_maximum: float = 90,
+    longitude_minimum: float = -180,
+    longitude_maximum: float = 180,
+) -> tuple[RecordIssue, ...]:
+    """Find inconsistent, malformed, or out-of-range coordinates.
+
+    Args:
+        data: Raw source records.
+        primary_key: Source column identifying each inspection.
+        latitude_column: Source latitude column.
+        longitude_column: Source longitude column.
+        latitude_minimum: Lowest latitude accepted by the contract.
+        latitude_maximum: Highest latitude accepted by the contract.
+        longitude_minimum: Lowest longitude accepted by the contract.
+        longitude_maximum: Highest longitude accepted by the contract.
+
+    Returns:
+        Immutable issues ordered by source CSV row and validation rule.
+
+    Raises:
+        RecordValidationError: If coordinate bounds or required columns
+            prevent validation.
+    """
+    latitude_bounds = _validate_coordinate_bounds(
+        minimum=latitude_minimum,
+        maximum=latitude_maximum,
+        coordinate_name="Latitude",
+    )
+    longitude_bounds = _validate_coordinate_bounds(
+        minimum=longitude_minimum,
+        maximum=longitude_maximum,
+        coordinate_name="Longitude",
+    )
+
+    required_columns = [
+        primary_key,
+        latitude_column,
+        longitude_column,
+    ]
+    missing_columns = [
+        column for column in required_columns if column not in data.columns
+    ]
+
+    if missing_columns:
+        raise RecordValidationError(
+            f"Data is missing required validation columns: {missing_columns}"
+        )
+
+    inspection_ids = data[primary_key].astype("string").reset_index(drop=True)
+    latitude_values = data[latitude_column].astype("string").reset_index(drop=True)
+    longitude_values = data[longitude_column].astype("string").reset_index(drop=True)
+
+    issues: list[RecordIssue] = []
+
+    for position in range(len(data)):
+        source_row_number = position + 2
+
+        inspection_id_value = inspection_ids.iat[position]
+        latitude_value = latitude_values.iat[position]
+        longitude_value = longitude_values.iat[position]
+
+        inspection_id = "" if pd.isna(inspection_id_value) else str(inspection_id_value)
+        raw_latitude = "" if pd.isna(latitude_value) else str(latitude_value)
+        raw_longitude = "" if pd.isna(longitude_value) else str(longitude_value)
+
+        latitude_blank = not raw_latitude.strip()
+        longitude_blank = not raw_longitude.strip()
+
+        if latitude_blank != longitude_blank:
+            issues.append(
+                RecordIssue(
+                    source_row_number=source_row_number,
+                    inspection_id=inspection_id,
+                    rule_id="coordinate_pair_consistency",
+                    column=f"{latitude_column},{longitude_column}",
+                    value=(
+                        f"{latitude_column}={raw_latitude!r}; "
+                        f"{longitude_column}={raw_longitude!r}"
+                    ),
+                    message=(
+                        "Latitude and longitude must both be present or both be null."
+                    ),
+                )
+            )
+
+        if not latitude_blank:
+            issues.extend(
+                _find_coordinate_value_issues(
+                    source_row_number=source_row_number,
+                    inspection_id=inspection_id,
+                    column=latitude_column,
+                    raw_value=raw_latitude,
+                    coordinate_name="Latitude",
+                    minimum=latitude_bounds[0],
+                    maximum=latitude_bounds[1],
+                )
+            )
+
+        if not longitude_blank:
+            issues.extend(
+                _find_coordinate_value_issues(
+                    source_row_number=source_row_number,
+                    inspection_id=inspection_id,
+                    column=longitude_column,
+                    raw_value=raw_longitude,
+                    coordinate_name="Longitude",
+                    minimum=longitude_bounds[0],
+                    maximum=longitude_bounds[1],
+                )
+            )
+
+    return tuple(issues)
+
+
+def _validate_coordinate_bounds(
+    *,
+    minimum: float,
+    maximum: float,
+    coordinate_name: str,
+) -> tuple[float, float]:
+    """Validate and normalize one configured coordinate range."""
+    if (
+        isinstance(minimum, bool)
+        or not isinstance(minimum, (int, float))
+        or isinstance(maximum, bool)
+        or not isinstance(maximum, (int, float))
+    ):
+        raise RecordValidationError(f"{coordinate_name} bounds must be numeric.")
+
+    normalized_minimum = float(minimum)
+    normalized_maximum = float(maximum)
+
+    if not isfinite(normalized_minimum) or not isfinite(normalized_maximum):
+        raise RecordValidationError(f"{coordinate_name} bounds must be finite.")
+
+    if normalized_minimum >= normalized_maximum:
+        raise RecordValidationError(
+            f"{coordinate_name} minimum must be lower than its maximum."
+        )
+
+    return normalized_minimum, normalized_maximum
+
+
+def _find_coordinate_value_issues(
+    *,
+    source_row_number: int,
+    inspection_id: str,
+    column: str,
+    raw_value: str,
+    coordinate_name: str,
+    minimum: float,
+    maximum: float,
+) -> list[RecordIssue]:
+    """Validate one non-blank coordinate value."""
+    try:
+        numeric_value = float(raw_value)
+    except ValueError:
+        numeric_value = float("nan")
+
+    if not isfinite(numeric_value):
+        return [
+            RecordIssue(
+                source_row_number=source_row_number,
+                inspection_id=inspection_id,
+                rule_id=f"{column}_numeric",
+                column=column,
+                value=raw_value,
+                message=f"{coordinate_name} must be a finite number.",
+            )
+        ]
+
+    if not minimum <= numeric_value <= maximum:
+        return [
+            RecordIssue(
+                source_row_number=source_row_number,
+                inspection_id=inspection_id,
+                rule_id=f"{column}_range",
+                column=column,
+                value=raw_value,
+                message=(
+                    f"{coordinate_name} must be between {minimum:g} and {maximum:g}."
+                ),
+            )
+        ]
+
+    return []
