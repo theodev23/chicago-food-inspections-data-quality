@@ -8,6 +8,7 @@ import pytest
 from data_quality_pipeline.validation import (
     RecordIssue,
     RecordValidationError,
+    find_coordinate_issues,
     find_inspection_date_issues,
     find_inspection_id_issues,
     find_inspection_result_issues,
@@ -669,3 +670,318 @@ def test_find_inspection_result_issues_rejects_missing_columns() -> None:
 
     assert "inspection_id" in message
     assert "results" in message
+
+
+def test_find_coordinate_issues_accepts_valid_and_missing_pairs() -> None:
+    """Complete coordinate pairs and fully blank pairs should be accepted."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "latitude": "41.881",
+                "longitude": "-87.627",
+            },
+            {
+                "inspection_id": "2",
+                "latitude": "",
+                "longitude": "",
+            },
+            {
+                "inspection_id": "3",
+                "latitude": "   ",
+                "longitude": "   ",
+            },
+            {
+                "inspection_id": "4",
+                "latitude": "-90",
+                "longitude": "180",
+            },
+        ]
+    )
+
+    issues = find_coordinate_issues(data)
+
+    assert issues == ()
+
+
+def test_find_coordinate_issues_classifies_coordinate_failures() -> None:
+    """Pair, numeric, and range failures should be distinguished."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "10",
+                "latitude": "",
+                "longitude": "-87.6",
+            },
+            {
+                "inspection_id": "11",
+                "latitude": "north",
+                "longitude": "-87.6",
+            },
+            {
+                "inspection_id": "12",
+                "latitude": "91",
+                "longitude": "-87.6",
+            },
+            {
+                "inspection_id": "13",
+                "latitude": "41.8",
+                "longitude": "west",
+            },
+            {
+                "inspection_id": "14",
+                "latitude": "41.8",
+                "longitude": "-181",
+            },
+        ]
+    )
+    data.index = [50, 60, 70, 80, 90]
+
+    issues = find_coordinate_issues(data)
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="10",
+            rule_id="coordinate_pair_consistency",
+            column="latitude,longitude",
+            value="latitude=''; longitude='-87.6'",
+            message=("Latitude and longitude must both be present or both be null."),
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="11",
+            rule_id="latitude_numeric",
+            column="latitude",
+            value="north",
+            message="Latitude must be a finite number.",
+        ),
+        RecordIssue(
+            source_row_number=4,
+            inspection_id="12",
+            rule_id="latitude_range",
+            column="latitude",
+            value="91",
+            message="Latitude must be between -90 and 90.",
+        ),
+        RecordIssue(
+            source_row_number=5,
+            inspection_id="13",
+            rule_id="longitude_numeric",
+            column="longitude",
+            value="west",
+            message="Longitude must be a finite number.",
+        ),
+        RecordIssue(
+            source_row_number=6,
+            inspection_id="14",
+            rule_id="longitude_range",
+            column="longitude",
+            value="-181",
+            message="Longitude must be between -180 and 180.",
+        ),
+    )
+
+
+def test_find_coordinate_issues_can_report_multiple_issues_for_one_row() -> None:
+    """Pair inconsistency and invalid content may coexist on one row."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "15",
+                "latitude": "",
+                "longitude": "west",
+            },
+            {
+                "inspection_id": "16",
+                "latitude": "NaN",
+                "longitude": "inf",
+            },
+        ]
+    )
+
+    issues = find_coordinate_issues(data)
+
+    assert [issue.rule_id for issue in issues] == [
+        "coordinate_pair_consistency",
+        "longitude_numeric",
+        "latitude_numeric",
+        "longitude_numeric",
+    ]
+    assert [issue.source_row_number for issue in issues] == [
+        2,
+        2,
+        3,
+        3,
+    ]
+
+
+def test_find_coordinate_issues_supports_custom_columns_and_bounds() -> None:
+    """Coordinate names and ranges should come from the contract."""
+    data = _frame(
+        [
+            {
+                "custom_id": "1",
+                "custom_latitude": "5",
+                "custom_longitude": "15",
+            }
+        ]
+    )
+
+    issues = find_coordinate_issues(
+        data,
+        primary_key="custom_id",
+        latitude_column="custom_latitude",
+        longitude_column="custom_longitude",
+        latitude_minimum=0,
+        latitude_maximum=10,
+        longitude_minimum=10,
+        longitude_maximum=20,
+    )
+
+    assert issues == ()
+
+
+@pytest.mark.parametrize(
+    ("bounds", "message"),
+    [
+        (
+            {"latitude_minimum": "low"},
+            "Latitude bounds must be numeric",
+        ),
+        (
+            {"latitude_maximum": True},
+            "Latitude bounds must be numeric",
+        ),
+        (
+            {"longitude_minimum": None},
+            "Longitude bounds must be numeric",
+        ),
+        (
+            {"longitude_maximum": False},
+            "Longitude bounds must be numeric",
+        ),
+    ],
+)
+def test_find_coordinate_issues_rejects_non_numeric_bounds(
+    bounds: dict[str, object],
+    message: str,
+) -> None:
+    """Configured coordinate bounds must be numeric and not boolean."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "latitude": "41.8",
+                "longitude": "-87.6",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match=message,
+    ):
+        find_coordinate_issues(
+            data,
+            **bounds,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bounds", "message"),
+    [
+        (
+            {"latitude_minimum": float("-inf")},
+            "Latitude bounds must be finite",
+        ),
+        (
+            {"longitude_maximum": float("nan")},
+            "Longitude bounds must be finite",
+        ),
+    ],
+)
+def test_find_coordinate_issues_rejects_non_finite_bounds(
+    bounds: dict[str, object],
+    message: str,
+) -> None:
+    """Configured coordinate bounds must be finite."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "latitude": "41.8",
+                "longitude": "-87.6",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match=message,
+    ):
+        find_coordinate_issues(
+            data,
+            **bounds,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bounds", "message"),
+    [
+        (
+            {
+                "latitude_minimum": 90,
+                "latitude_maximum": 90,
+            },
+            "Latitude minimum must be lower than its maximum",
+        ),
+        (
+            {
+                "longitude_minimum": 180,
+                "longitude_maximum": -180,
+            },
+            "Longitude minimum must be lower than its maximum",
+        ),
+    ],
+)
+def test_find_coordinate_issues_rejects_invalid_bound_order(
+    bounds: dict[str, object],
+    message: str,
+) -> None:
+    """Each configured minimum must be lower than its maximum."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "latitude": "41.8",
+                "longitude": "-87.6",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match=message,
+    ):
+        find_coordinate_issues(
+            data,
+            **bounds,
+        )
+
+
+def test_find_coordinate_issues_rejects_missing_columns() -> None:
+    """The primary key, latitude, and longitude columns are required."""
+    data = _frame([{"other_column": "value"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Data is missing required validation columns",
+    ) as error:
+        find_coordinate_issues(data)
+
+    message = str(error.value)
+
+    assert "inspection_id" in message
+    assert "latitude" in message
+    assert "longitude" in message
