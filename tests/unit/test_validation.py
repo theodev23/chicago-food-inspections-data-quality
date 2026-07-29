@@ -12,6 +12,7 @@ from data_quality_pipeline.validation import (
     find_inspection_date_issues,
     find_inspection_id_issues,
     find_inspection_result_issues,
+    find_string_pattern_issues,
 )
 
 
@@ -985,3 +986,310 @@ def test_find_coordinate_issues_rejects_missing_columns() -> None:
     assert "inspection_id" in message
     assert "latitude" in message
     assert "longitude" in message
+
+
+def test_find_string_pattern_issues_accepts_valid_and_nullable_values() -> None:
+    """Valid strings and permitted blank values should produce no issues."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            },
+            {
+                "inspection_id": "2",
+                "state": "",
+            },
+            {
+                "inspection_id": "3",
+                "state": "NY",
+            },
+        ]
+    )
+
+    issues = find_string_pattern_issues(
+        data,
+        column="state",
+        pattern=r"^[A-Z]{2}$",
+        nullable=True,
+    )
+
+    assert issues == ()
+
+
+def test_find_string_pattern_issues_classifies_row_failures() -> None:
+    """Missing required values and pattern failures should be distinguished."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "10",
+                "state": "",
+            },
+            {
+                "inspection_id": "11",
+                "state": "Illinois",
+            },
+            {
+                "inspection_id": "12",
+                "state": "IL",
+            },
+        ]
+    )
+    data.index = [50, 60, 70]
+
+    issues = find_string_pattern_issues(
+        data,
+        column="state",
+        pattern=r"^[A-Z]{2}$",
+        nullable=False,
+    )
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="10",
+            rule_id="state_required",
+            column="state",
+            value="",
+            message="state is required.",
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="11",
+            rule_id="state_pattern",
+            column="state",
+            value="Illinois",
+            message="state does not match the required pattern.",
+        ),
+    )
+
+
+def test_find_string_pattern_issues_requires_full_match() -> None:
+    """A substring match must not satisfy the contractual pattern."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            },
+            {
+                "inspection_id": "2",
+                "state": "ILL",
+            },
+            {
+                "inspection_id": "3",
+                "state": " IL",
+            },
+        ]
+    )
+
+    issues = find_string_pattern_issues(
+        data,
+        column="state",
+        pattern=r"[A-Z]{2}",
+        nullable=False,
+    )
+
+    assert [issue.value for issue in issues] == [
+        "ILL",
+        " IL",
+    ]
+    assert all(issue.rule_id == "state_pattern" for issue in issues)
+
+
+def test_find_string_pattern_issues_supports_custom_columns() -> None:
+    """Column names should come from the calling contract."""
+    data = _frame(
+        [
+            {
+                "custom_id": "1",
+                "postal_code": "60601",
+            }
+        ]
+    )
+
+    issues = find_string_pattern_issues(
+        data,
+        column="postal_code",
+        pattern=r"[0-9]{5}",
+        nullable=False,
+        primary_key="custom_id",
+    )
+
+    assert issues == ()
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "",
+        "   ",
+        123,
+    ],
+)
+def test_find_string_pattern_issues_rejects_invalid_column(
+    column: object,
+) -> None:
+    """The validated column name must be a non-empty string."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Pattern validation column must be a non-empty string",
+    ):
+        find_string_pattern_issues(
+            data,
+            column=column,
+            pattern=r"[A-Z]{2}",
+            nullable=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "primary_key",
+    [
+        "",
+        "   ",
+        123,
+    ],
+)
+def test_find_string_pattern_issues_rejects_invalid_primary_key(
+    primary_key: object,
+) -> None:
+    """The primary-key column name must be a non-empty string."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Pattern validation primary key must be a non-empty string",
+    ):
+        find_string_pattern_issues(
+            data,
+            column="state",
+            pattern=r"[A-Z]{2}",
+            nullable=False,
+            primary_key=primary_key,
+        )
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "",
+        None,
+        123,
+    ],
+)
+def test_find_string_pattern_issues_rejects_invalid_pattern(
+    pattern: object,
+) -> None:
+    """The configured regular expression must be a non-empty string."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Validation pattern must be a non-empty string",
+    ):
+        find_string_pattern_issues(
+            data,
+            column="state",
+            pattern=pattern,
+            nullable=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "nullable",
+    [
+        1,
+        "true",
+    ],
+)
+def test_find_string_pattern_issues_rejects_invalid_nullable_setting(
+    nullable: object,
+) -> None:
+    """The nullable setting must be a real boolean value."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Pattern validation nullable setting must be boolean",
+    ):
+        find_string_pattern_issues(
+            data,
+            column="state",
+            pattern=r"[A-Z]{2}",
+            nullable=nullable,
+        )
+
+
+def test_find_string_pattern_issues_rejects_invalid_regex() -> None:
+    """A malformed regular expression should raise a validation error."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "state": "IL",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Invalid validation pattern for state",
+    ):
+        find_string_pattern_issues(
+            data,
+            column="state",
+            pattern="[",
+            nullable=False,
+        )
+
+
+def test_find_string_pattern_issues_rejects_missing_columns() -> None:
+    """The primary key and validated source column are required."""
+    data = _frame([{"other_column": "value"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Data is missing required validation columns",
+    ) as error:
+        find_string_pattern_issues(
+            data,
+            column="state",
+            pattern=r"[A-Z]{2}",
+            nullable=True,
+        )
+
+    message = str(error.value)
+
+    assert "inspection_id" in message
+    assert "state" in message
