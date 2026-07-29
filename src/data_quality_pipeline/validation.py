@@ -576,3 +576,106 @@ def _find_coordinate_value_issues(
         ]
 
     return []
+
+
+def find_string_pattern_issues(
+    data: pd.DataFrame,
+    *,
+    column: str,
+    pattern: str,
+    nullable: bool,
+    primary_key: str = "inspection_id",
+) -> tuple[RecordIssue, ...]:
+    """Find missing or incorrectly formatted string values.
+
+    Args:
+        data: Raw source records.
+        column: Source column validated against the pattern.
+        pattern: Regular expression that must match the entire value.
+        nullable: Whether blank values are accepted.
+        primary_key: Source column identifying each inspection.
+
+    Returns:
+        Immutable issues ordered by their source CSV row number.
+
+    Raises:
+        RecordValidationError: If validation parameters or required columns
+            prevent pattern validation.
+    """
+    if not isinstance(column, str) or not column.strip():
+        raise RecordValidationError(
+            "Pattern validation column must be a non-empty string."
+        )
+
+    if not isinstance(primary_key, str) or not primary_key.strip():
+        raise RecordValidationError(
+            "Pattern validation primary key must be a non-empty string."
+        )
+
+    if not isinstance(pattern, str) or not pattern:
+        raise RecordValidationError("Validation pattern must be a non-empty string.")
+
+    if not isinstance(nullable, bool):
+        raise RecordValidationError(
+            "Pattern validation nullable setting must be boolean."
+        )
+
+    try:
+        compiled_pattern = re.compile(pattern)
+    except re.error as exc:
+        raise RecordValidationError(
+            f"Invalid validation pattern for {column}: {pattern}"
+        ) from exc
+
+    required_columns = [primary_key, column]
+    missing_columns = [
+        required_column
+        for required_column in required_columns
+        if required_column not in data.columns
+    ]
+
+    if missing_columns:
+        raise RecordValidationError(
+            f"Data is missing required validation columns: {missing_columns}"
+        )
+
+    inspection_ids = data[primary_key].astype("string").reset_index(drop=True)
+    values = data[column].astype("string").reset_index(drop=True)
+
+    issues: list[RecordIssue] = []
+
+    for position in range(len(data)):
+        inspection_id_value = inspection_ids.iat[position]
+        value = values.iat[position]
+
+        inspection_id = "" if pd.isna(inspection_id_value) else str(inspection_id_value)
+        raw_value = "" if pd.isna(value) else str(value)
+
+        if not raw_value.strip():
+            if not nullable:
+                issues.append(
+                    RecordIssue(
+                        source_row_number=position + 2,
+                        inspection_id=inspection_id,
+                        rule_id=f"{column}_required",
+                        column=column,
+                        value=raw_value,
+                        message=f"{column} is required.",
+                    )
+                )
+
+            continue
+
+        if compiled_pattern.fullmatch(raw_value) is None:
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id=f"{column}_pattern",
+                    column=column,
+                    value=raw_value,
+                    message=(f"{column} does not match the required pattern."),
+                )
+            )
+
+    return tuple(issues)
