@@ -10,6 +10,7 @@ from data_quality_pipeline.validation import (
     RecordValidationError,
     find_inspection_date_issues,
     find_inspection_id_issues,
+    find_inspection_result_issues,
 )
 
 
@@ -429,3 +430,242 @@ def test_find_inspection_id_issues_rejects_missing_primary_key() -> None:
         match="Data is missing required validation column: inspection_id",
     ):
         find_inspection_id_issues(data)
+
+
+def test_find_inspection_result_issues_returns_empty_tuple_for_valid_values() -> None:
+    """Allowed inspection results should produce no issues."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "results": "Pass",
+            },
+            {
+                "inspection_id": "2",
+                "results": "Fail",
+            },
+            {
+                "inspection_id": "3",
+                "results": "Pass w/ Conditions",
+            },
+        ]
+    )
+
+    issues = find_inspection_result_issues(
+        data,
+        allowed_values=[
+            "Pass",
+            "Fail",
+            "Pass w/ Conditions",
+        ],
+    )
+
+    assert issues == ()
+
+
+def test_find_inspection_result_issues_classifies_row_failures() -> None:
+    """Missing and unknown inspection results should be distinguished."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "10",
+                "results": "",
+            },
+            {
+                "inspection_id": "11",
+                "results": "Pending",
+            },
+            {
+                "inspection_id": "12",
+                "results": "Pass",
+            },
+        ]
+    )
+    data.index = [50, 60, 70]
+
+    issues = find_inspection_result_issues(
+        data,
+        allowed_values=["Pass", "Fail"],
+    )
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="10",
+            rule_id="inspection_result_required",
+            column="results",
+            value="",
+            message="Inspection result is required.",
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="11",
+            rule_id="inspection_result_allowed_values",
+            column="results",
+            value="Pending",
+            message="Inspection result is not an allowed value.",
+        ),
+    )
+
+
+def test_find_inspection_result_issues_uses_exact_matching() -> None:
+    """Case and surrounding whitespace must not be normalized silently."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "results": "pass",
+            },
+            {
+                "inspection_id": "2",
+                "results": "Pass ",
+            },
+        ]
+    )
+
+    issues = find_inspection_result_issues(
+        data,
+        allowed_values=["Pass"],
+    )
+
+    assert [issue.rule_id for issue in issues] == [
+        "inspection_result_allowed_values",
+        "inspection_result_allowed_values",
+    ]
+    assert [issue.value for issue in issues] == [
+        "pass",
+        "Pass ",
+    ]
+
+
+def test_find_inspection_result_issues_supports_custom_columns() -> None:
+    """The validator should support contract-defined source column names."""
+    data = _frame(
+        [
+            {
+                "custom_id": "1",
+                "custom_result": "Accepted",
+            }
+        ]
+    )
+
+    issues = find_inspection_result_issues(
+        data,
+        allowed_values=["Accepted"],
+        primary_key="custom_id",
+        result_column="custom_result",
+    )
+
+    assert issues == ()
+
+
+def test_find_inspection_result_issues_rejects_string_allowed_values() -> None:
+    """One string must not be interpreted as a sequence of categories."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "results": "Pass",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Allowed inspection results must be a sequence of strings",
+    ):
+        find_inspection_result_issues(
+            data,
+            allowed_values="Pass",
+        )
+
+
+def test_find_inspection_result_issues_requires_allowed_value() -> None:
+    """At least one accepted result category must be configured."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "results": "Pass",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="At least one allowed inspection result is required",
+    ):
+        find_inspection_result_issues(
+            data,
+            allowed_values=[],
+        )
+
+
+@pytest.mark.parametrize(
+    "allowed_values",
+    [
+        ["Pass", "   "],
+        ["Pass", 123],
+    ],
+)
+def test_find_inspection_result_issues_rejects_invalid_allowed_entries(
+    allowed_values: list[object],
+) -> None:
+    """Allowed result categories must be non-empty strings."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "results": "Pass",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Allowed inspection results must be non-empty strings",
+    ):
+        find_inspection_result_issues(
+            data,
+            allowed_values=allowed_values,
+        )
+
+
+def test_find_inspection_result_issues_rejects_duplicate_allowed_values() -> None:
+    """The contract must not declare the same result category twice."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "results": "Pass",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Allowed inspection results contain duplicate values",
+    ):
+        find_inspection_result_issues(
+            data,
+            allowed_values=["Pass", "Pass"],
+        )
+
+
+def test_find_inspection_result_issues_rejects_missing_columns() -> None:
+    """Both the primary key and result column are required."""
+    data = _frame([{"other_column": "value"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Data is missing required validation columns",
+    ) as error:
+        find_inspection_result_issues(
+            data,
+            allowed_values=["Pass"],
+        )
+
+    message = str(error.value)
+
+    assert "inspection_id" in message
+    assert "results" in message

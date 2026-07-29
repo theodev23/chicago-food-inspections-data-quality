@@ -284,3 +284,99 @@ def find_inspection_id_issues(
         )
 
     return tuple(issue for issue in row_issues if issue is not None)
+
+
+def find_inspection_result_issues(
+    data: pd.DataFrame,
+    *,
+    allowed_values: Sequence[str],
+    primary_key: str = "inspection_id",
+    result_column: str = "results",
+) -> tuple[RecordIssue, ...]:
+    """Find missing or unknown inspection results.
+
+    Args:
+        data: Raw source records.
+        allowed_values: Exact result values accepted by the data contract.
+        primary_key: Source column identifying each inspection.
+        result_column: Source inspection-result column.
+
+    Returns:
+        Immutable issues ordered by their source CSV row number.
+
+    Raises:
+        RecordValidationError: If the allowed values or required columns
+            prevent inspection-result validation.
+    """
+    if isinstance(allowed_values, (str, bytes)):
+        raise RecordValidationError(
+            "Allowed inspection results must be a sequence of strings."
+        )
+
+    values = list(allowed_values)
+
+    if not values:
+        raise RecordValidationError(
+            "At least one allowed inspection result is required."
+        )
+
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        raise RecordValidationError(
+            "Allowed inspection results must be non-empty strings."
+        )
+
+    if len(values) != len(set(values)):
+        raise RecordValidationError(
+            "Allowed inspection results contain duplicate values."
+        )
+
+    required_columns = [primary_key, result_column]
+    missing_columns = [
+        column for column in required_columns if column not in data.columns
+    ]
+
+    if missing_columns:
+        raise RecordValidationError(
+            f"Data is missing required validation columns: {missing_columns}"
+        )
+
+    allowed_set = set(values)
+
+    inspection_ids = data[primary_key].astype("string").reset_index(drop=True)
+    result_values = data[result_column].astype("string").reset_index(drop=True)
+
+    issues: list[RecordIssue] = []
+
+    for position in range(len(data)):
+        inspection_id_value = inspection_ids.iat[position]
+        result_value = result_values.iat[position]
+
+        inspection_id = "" if pd.isna(inspection_id_value) else str(inspection_id_value)
+        raw_result = "" if pd.isna(result_value) else str(result_value)
+
+        if not raw_result.strip():
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id="inspection_result_required",
+                    column=result_column,
+                    value=raw_result,
+                    message="Inspection result is required.",
+                )
+            )
+            continue
+
+        if raw_result not in allowed_set:
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id="inspection_result_allowed_values",
+                    column=result_column,
+                    value=raw_result,
+                    message=("Inspection result is not an allowed value."),
+                )
+            )
+
+    return tuple(issues)
