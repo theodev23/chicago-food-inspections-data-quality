@@ -1293,3 +1293,60 @@ def test_find_string_pattern_issues_rejects_missing_columns() -> None:
 
     assert "inspection_id" in message
     assert "state" in message
+
+
+def test_record_issue_defaults_to_error_severity() -> None:
+    """Existing validators should classify issues as errors by default."""
+    issue = RecordIssue(
+        source_row_number=2,
+        inspection_id="1",
+        rule_id="inspection_id_required",
+        column="inspection_id",
+        value="",
+        message="inspection_id is required.",
+    )
+
+    assert issue.severity == "error"
+
+
+def test_record_issue_accepts_warning_severity() -> None:
+    """Non-blocking quality findings should support warning severity."""
+    issue = RecordIssue(
+        source_row_number=2,
+        inspection_id="1",
+        rule_id="license_zero",
+        column="license_",
+        value="0",
+        message="license_ uses the zero sentinel.",
+        severity="warning",
+    )
+
+    assert issue.severity == "warning"
+
+
+@pytest.mark.parametrize(
+    "severity",
+    [
+        "",
+        "critical",
+        1,
+        None,
+    ],
+)
+def test_record_issue_rejects_invalid_severity(
+    severity: object,
+) -> None:
+    """Only error and warning should be accepted as issue severities."""
+    with pytest.raises(
+        ValueError,
+        match="Record issue severity must be 'error' or 'warning'",
+    ):
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="1",
+            rule_id="example_rule",
+            column="example_column",
+            value="example_value",
+            message="Example issue.",
+            severity=severity,
+        )

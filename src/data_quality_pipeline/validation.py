@@ -5,10 +5,14 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
+from typing import Literal
 
 import pandas as pd
 
 _INT64_MAX_TEXT = "9223372036854775807"
+
+
+IssueSeverity = Literal["error", "warning"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +25,15 @@ class RecordIssue:
     column: str
     value: str
     message: str
+    severity: IssueSeverity = "error"
+
+    def __post_init__(self) -> None:
+        """Reject unsupported issue severities."""
+        if not isinstance(self.severity, str) or self.severity not in (
+            "error",
+            "warning",
+        ):
+            raise ValueError("Record issue severity must be 'error' or 'warning'.")
 
 
 class RecordValidationError(Exception):
