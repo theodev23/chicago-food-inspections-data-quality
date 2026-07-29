@@ -12,6 +12,8 @@ from data_quality_pipeline.validation import (
     find_inspection_date_issues,
     find_inspection_id_issues,
     find_inspection_result_issues,
+    find_license_issues,
+    find_risk_issues,
     find_string_pattern_issues,
 )
 
@@ -1350,3 +1352,546 @@ def test_record_issue_rejects_invalid_severity(
             message="Example issue.",
             severity=severity,
         )
+
+
+def test_find_license_issues_accepts_valid_and_nullable_values() -> None:
+    """Valid digits and permitted blank values should produce no issues."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "license_": "1234567",
+            },
+            {
+                "inspection_id": "2",
+                "license_": "",
+            },
+            {
+                "inspection_id": "3",
+                "license_": "0",
+            },
+        ]
+    )
+
+    issues = find_license_issues(
+        data,
+        nullable=True,
+        zero_as_null=False,
+        format_when_present="digits",
+    )
+
+    assert issues == ()
+
+
+def test_find_license_issues_classifies_row_failures() -> None:
+    """Required, malformed, and zero-sentinel values should be distinguished."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "10",
+                "license_": "",
+            },
+            {
+                "inspection_id": "11",
+                "license_": "12A",
+            },
+            {
+                "inspection_id": "12",
+                "license_": "0",
+            },
+        ]
+    )
+    data.index = [50, 60, 70]
+
+    issues = find_license_issues(
+        data,
+        nullable=False,
+        zero_as_null=True,
+        format_when_present="digits",
+    )
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="10",
+            rule_id="license_required",
+            column="license_",
+            value="",
+            message="license_ is required.",
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="11",
+            rule_id="license_digits",
+            column="license_",
+            value="12A",
+            message="license_ must contain digits only.",
+        ),
+        RecordIssue(
+            source_row_number=4,
+            inspection_id="12",
+            rule_id="license_zero_sentinel",
+            column="license_",
+            value="0",
+            message=("license_ uses the zero sentinel and will be normalized to null."),
+            severity="warning",
+        ),
+    )
+
+
+def test_find_license_issues_supports_custom_columns() -> None:
+    """Column names should come from the calling contract."""
+    data = _frame(
+        [
+            {
+                "custom_id": "1",
+                "license_number": "12345",
+            }
+        ]
+    )
+
+    issues = find_license_issues(
+        data,
+        nullable=False,
+        zero_as_null=True,
+        format_when_present="digits",
+        primary_key="custom_id",
+        license_column="license_number",
+    )
+
+    assert issues == ()
+
+
+@pytest.mark.parametrize(
+    "primary_key",
+    [
+        "",
+        "   ",
+        123,
+    ],
+)
+def test_find_license_issues_rejects_invalid_primary_key(
+    primary_key: object,
+) -> None:
+    """The primary-key column name must be a non-empty string."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "license_": "123",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="License validation primary key must be a non-empty string",
+    ):
+        find_license_issues(
+            data,
+            nullable=True,
+            zero_as_null=True,
+            format_when_present="digits",
+            primary_key=primary_key,
+        )
+
+
+@pytest.mark.parametrize(
+    "license_column",
+    [
+        "",
+        "   ",
+        123,
+    ],
+)
+def test_find_license_issues_rejects_invalid_license_column(
+    license_column: object,
+) -> None:
+    """The license column name must be a non-empty string."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "license_": "123",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="License validation column must be a non-empty string",
+    ):
+        find_license_issues(
+            data,
+            nullable=True,
+            zero_as_null=True,
+            format_when_present="digits",
+            license_column=license_column,
+        )
+
+
+@pytest.mark.parametrize(
+    "nullable",
+    [
+        1,
+        "true",
+    ],
+)
+def test_find_license_issues_rejects_invalid_nullable_setting(
+    nullable: object,
+) -> None:
+    """The nullable setting must be a real boolean value."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "license_": "123",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="License nullable setting must be boolean",
+    ):
+        find_license_issues(
+            data,
+            nullable=nullable,
+            zero_as_null=True,
+            format_when_present="digits",
+        )
+
+
+@pytest.mark.parametrize(
+    "zero_as_null",
+    [
+        1,
+        "true",
+    ],
+)
+def test_find_license_issues_rejects_invalid_zero_as_null_setting(
+    zero_as_null: object,
+) -> None:
+    """The zero-as-null setting must be a real boolean value."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "license_": "123",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="License zero-as-null setting must be boolean",
+    ):
+        find_license_issues(
+            data,
+            nullable=True,
+            zero_as_null=zero_as_null,
+            format_when_present="digits",
+        )
+
+
+@pytest.mark.parametrize(
+    "format_when_present",
+    [
+        "",
+        "integer",
+        None,
+    ],
+)
+def test_find_license_issues_rejects_unsupported_format(
+    format_when_present: object,
+) -> None:
+    """The implemented license format must match the contract vocabulary."""
+    data = _frame(
+        [
+            {
+                "inspection_id": "1",
+                "license_": "123",
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RecordValidationError,
+        match="License format_when_present must be 'digits'",
+    ):
+        find_license_issues(
+            data,
+            nullable=True,
+            zero_as_null=True,
+            format_when_present=format_when_present,
+        )
+
+
+def test_find_license_issues_rejects_missing_columns() -> None:
+    """The primary key and license source column are required."""
+    data = _frame([{"other_column": "value"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Data is missing required validation columns",
+    ) as error:
+        find_license_issues(
+            data,
+            nullable=True,
+            zero_as_null=True,
+            format_when_present="digits",
+        )
+
+    message = str(error.value)
+
+    assert "inspection_id" in message
+    assert "license_" in message
+
+
+def test_find_risk_issues_accepts_allowed_values() -> None:
+    """Every risk value declared by the contract should be accepted."""
+    data = _frame(
+        [
+            {"inspection_id": "1", "risk": "Risk 1 (High)"},
+            {"inspection_id": "2", "risk": "Risk 2 (Medium)"},
+            {"inspection_id": "3", "risk": "Risk 3 (Low)"},
+            {"inspection_id": "4", "risk": "All"},
+        ]
+    )
+
+    issues = find_risk_issues(
+        data,
+        allowed_values=[
+            "Risk 1 (High)",
+            "Risk 2 (Medium)",
+            "Risk 3 (Low)",
+            "All",
+        ],
+        unknown_value_severity="warning",
+    )
+
+    assert issues == ()
+
+
+def test_find_risk_issues_classifies_missing_and_unknown_values() -> None:
+    """Missing and unknown risks should use the configured severity."""
+    data = _frame(
+        [
+            {"inspection_id": "10", "risk": ""},
+            {"inspection_id": "11", "risk": "Risk 4 (Very Low)"},
+            {"inspection_id": "12", "risk": "Risk 1 (High)"},
+        ]
+    )
+    data.index = [50, 60, 70]
+
+    issues = find_risk_issues(
+        data,
+        allowed_values=[
+            "Risk 1 (High)",
+            "Risk 2 (Medium)",
+            "Risk 3 (Low)",
+            "All",
+        ],
+        unknown_value_severity="warning",
+    )
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="10",
+            rule_id="risk_missing",
+            column="risk",
+            value="",
+            message="risk is missing.",
+            severity="warning",
+        ),
+        RecordIssue(
+            source_row_number=3,
+            inspection_id="11",
+            rule_id="risk_unknown",
+            column="risk",
+            value="Risk 4 (Very Low)",
+            message="risk is not an allowed risk value.",
+            severity="warning",
+        ),
+    )
+
+
+def test_find_risk_issues_supports_custom_columns_and_error_severity() -> None:
+    """Column names and blocking severity should come from the contract."""
+    data = _frame(
+        [
+            {
+                "custom_id": "1",
+                "risk_level": "Unknown",
+            }
+        ]
+    )
+
+    issues = find_risk_issues(
+        data,
+        allowed_values=["High", "Medium", "Low"],
+        unknown_value_severity="error",
+        primary_key="custom_id",
+        risk_column="risk_level",
+    )
+
+    assert issues == (
+        RecordIssue(
+            source_row_number=2,
+            inspection_id="1",
+            rule_id="risk_unknown",
+            column="risk_level",
+            value="Unknown",
+            message="risk_level is not an allowed risk value.",
+            severity="error",
+        ),
+    )
+
+
+@pytest.mark.parametrize("primary_key", ["", "   ", 123])
+def test_find_risk_issues_rejects_invalid_primary_key(
+    primary_key: object,
+) -> None:
+    """The primary-key column name must be a non-empty string."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Risk validation primary key must be a non-empty string",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values=["Risk 1 (High)"],
+            unknown_value_severity="warning",
+            primary_key=primary_key,
+        )
+
+
+@pytest.mark.parametrize("risk_column", ["", "   ", 123])
+def test_find_risk_issues_rejects_invalid_risk_column(
+    risk_column: object,
+) -> None:
+    """The risk column name must be a non-empty string."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Risk validation column must be a non-empty string",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values=["Risk 1 (High)"],
+            unknown_value_severity="warning",
+            risk_column=risk_column,
+        )
+
+
+@pytest.mark.parametrize("severity", ["", "critical", 1, None])
+def test_find_risk_issues_rejects_invalid_severity(
+    severity: object,
+) -> None:
+    """Unknown risk values must use a supported issue severity."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Risk unknown-value severity must be 'error' or 'warning'",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values=["Risk 1 (High)"],
+            unknown_value_severity=severity,
+        )
+
+
+def test_find_risk_issues_rejects_string_allowed_values() -> None:
+    """A single string must not be interpreted as a value sequence."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Risk allowed values must be a sequence of strings",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values="Risk 1 (High)",
+            unknown_value_severity="warning",
+        )
+
+
+def test_find_risk_issues_requires_allowed_value() -> None:
+    """The risk reference set must contain at least one value."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="At least one allowed risk value is required",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values=[],
+            unknown_value_severity="warning",
+        )
+
+
+@pytest.mark.parametrize(
+    "allowed_values",
+    [
+        ["Risk 1 (High)", ""],
+        ["Risk 1 (High)", 123],
+    ],
+)
+def test_find_risk_issues_rejects_invalid_allowed_entries(
+    allowed_values: list[object],
+) -> None:
+    """Allowed risk entries must be non-empty strings."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Allowed risk values must be non-empty strings",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values=allowed_values,
+            unknown_value_severity="warning",
+        )
+
+
+def test_find_risk_issues_rejects_duplicate_allowed_values() -> None:
+    """The risk reference set must not contain duplicate values."""
+    data = _frame([{"inspection_id": "1", "risk": "Risk 1 (High)"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Allowed risk values must not contain duplicates",
+    ):
+        find_risk_issues(
+            data,
+            allowed_values=[
+                "Risk 1 (High)",
+                "Risk 1 (High)",
+            ],
+            unknown_value_severity="warning",
+        )
+
+
+def test_find_risk_issues_rejects_missing_columns() -> None:
+    """The primary key and risk source column are required."""
+    data = _frame([{"other_column": "value"}])
+
+    with pytest.raises(
+        RecordValidationError,
+        match="Data is missing required validation columns",
+    ) as error:
+        find_risk_issues(
+            data,
+            allowed_values=["Risk 1 (High)"],
+            unknown_value_severity="warning",
+        )
+
+    message = str(error.value)
+
+    assert "inspection_id" in message
+    assert "risk" in message

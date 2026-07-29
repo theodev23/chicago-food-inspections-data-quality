@@ -692,3 +692,227 @@ def find_string_pattern_issues(
             )
 
     return tuple(issues)
+
+
+def find_license_issues(
+    data: pd.DataFrame,
+    *,
+    nullable: bool,
+    zero_as_null: bool,
+    format_when_present: str,
+    primary_key: str = "inspection_id",
+    license_column: str = "license_",
+) -> tuple[RecordIssue, ...]:
+    """Find missing, malformed, or zero-sentinel license values.
+
+    Blank values are accepted when the contract declares the column nullable.
+    A zero license is reported as a non-blocking warning when it must be
+    normalized to null.
+
+    Args:
+        data: Raw source records.
+        nullable: Whether blank license values are accepted.
+        zero_as_null: Whether a numeric zero is a null sentinel.
+        format_when_present: Required format for populated license values.
+        primary_key: Source column identifying each inspection.
+        license_column: Source license-number column.
+
+    Returns:
+        Immutable issues ordered by their source CSV row number.
+
+    Raises:
+        RecordValidationError: If parameters or required columns are invalid.
+    """
+    if not isinstance(primary_key, str) or not primary_key.strip():
+        raise RecordValidationError(
+            "License validation primary key must be a non-empty string."
+        )
+
+    if not isinstance(license_column, str) or not license_column.strip():
+        raise RecordValidationError(
+            "License validation column must be a non-empty string."
+        )
+
+    if not isinstance(nullable, bool):
+        raise RecordValidationError("License nullable setting must be boolean.")
+
+    if not isinstance(zero_as_null, bool):
+        raise RecordValidationError("License zero-as-null setting must be boolean.")
+
+    if format_when_present != "digits":
+        raise RecordValidationError("License format_when_present must be 'digits'.")
+
+    required_columns = [primary_key, license_column]
+    missing_columns = [
+        column for column in required_columns if column not in data.columns
+    ]
+
+    if missing_columns:
+        raise RecordValidationError(
+            f"Data is missing required validation columns: {missing_columns}"
+        )
+
+    inspection_ids = data[primary_key].astype("string").reset_index(drop=True)
+    license_values = data[license_column].astype("string").reset_index(drop=True)
+
+    issues: list[RecordIssue] = []
+
+    for position in range(len(data)):
+        inspection_id_value = inspection_ids.iat[position]
+        license_value = license_values.iat[position]
+
+        inspection_id = "" if pd.isna(inspection_id_value) else str(inspection_id_value)
+        raw_value = "" if pd.isna(license_value) else str(license_value)
+
+        if not raw_value.strip():
+            if not nullable:
+                issues.append(
+                    RecordIssue(
+                        source_row_number=position + 2,
+                        inspection_id=inspection_id,
+                        rule_id="license_required",
+                        column=license_column,
+                        value=raw_value,
+                        message=f"{license_column} is required.",
+                    )
+                )
+
+            continue
+
+        if re.fullmatch(r"[0-9]+", raw_value) is None:
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id="license_digits",
+                    column=license_column,
+                    value=raw_value,
+                    message=(f"{license_column} must contain digits only."),
+                )
+            )
+            continue
+
+        if zero_as_null and int(raw_value) == 0:
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id="license_zero_sentinel",
+                    column=license_column,
+                    value=raw_value,
+                    message=(
+                        f"{license_column} uses the zero sentinel and "
+                        "will be normalized to null."
+                    ),
+                    severity="warning",
+                )
+            )
+
+    return tuple(issues)
+
+
+def find_risk_issues(
+    data: pd.DataFrame,
+    *,
+    allowed_values: Sequence[str],
+    unknown_value_severity: IssueSeverity,
+    primary_key: str = "inspection_id",
+    risk_column: str = "risk",
+) -> tuple[RecordIssue, ...]:
+    """Find missing or unknown inspection-risk values.
+
+    Args:
+        data: Raw source records.
+        allowed_values: Exact risk values accepted by the data contract.
+        unknown_value_severity: Severity assigned to missing or unknown risks.
+        primary_key: Source column identifying each inspection.
+        risk_column: Source risk column.
+
+    Returns:
+        Immutable issues ordered by their source CSV row number.
+
+    Raises:
+        RecordValidationError: If parameters or required columns are invalid.
+    """
+    if not isinstance(primary_key, str) or not primary_key.strip():
+        raise RecordValidationError(
+            "Risk validation primary key must be a non-empty string."
+        )
+
+    if not isinstance(risk_column, str) or not risk_column.strip():
+        raise RecordValidationError(
+            "Risk validation column must be a non-empty string."
+        )
+
+    if unknown_value_severity not in ("error", "warning"):
+        raise RecordValidationError(
+            "Risk unknown-value severity must be 'error' or 'warning'."
+        )
+
+    if isinstance(allowed_values, (str, bytes)):
+        raise RecordValidationError(
+            "Risk allowed values must be a sequence of strings."
+        )
+
+    values = list(allowed_values)
+
+    if not values:
+        raise RecordValidationError("At least one allowed risk value is required.")
+
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        raise RecordValidationError("Allowed risk values must be non-empty strings.")
+
+    if len(values) != len(set(values)):
+        raise RecordValidationError("Allowed risk values must not contain duplicates.")
+
+    required_columns = [primary_key, risk_column]
+    missing_columns = [
+        column for column in required_columns if column not in data.columns
+    ]
+
+    if missing_columns:
+        raise RecordValidationError(
+            f"Data is missing required validation columns: {missing_columns}"
+        )
+
+    inspection_ids = data[primary_key].astype("string").reset_index(drop=True)
+    risk_values = data[risk_column].astype("string").reset_index(drop=True)
+    allowed_value_set = set(values)
+
+    issues: list[RecordIssue] = []
+
+    for position in range(len(data)):
+        inspection_id_value = inspection_ids.iat[position]
+        risk_value = risk_values.iat[position]
+
+        inspection_id = "" if pd.isna(inspection_id_value) else str(inspection_id_value)
+        raw_value = "" if pd.isna(risk_value) else str(risk_value)
+
+        if not raw_value.strip():
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id="risk_missing",
+                    column=risk_column,
+                    value=raw_value,
+                    message=f"{risk_column} is missing.",
+                    severity=unknown_value_severity,
+                )
+            )
+            continue
+
+        if raw_value not in allowed_value_set:
+            issues.append(
+                RecordIssue(
+                    source_row_number=position + 2,
+                    inspection_id=inspection_id,
+                    rule_id="risk_unknown",
+                    column=risk_column,
+                    value=raw_value,
+                    message=(f"{risk_column} is not an allowed risk value."),
+                    severity=unknown_value_severity,
+                )
+            )
+
+    return tuple(issues)
