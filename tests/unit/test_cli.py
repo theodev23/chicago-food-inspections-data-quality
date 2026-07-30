@@ -1,0 +1,328 @@
+"""Unit tests for the annual pipeline command-line interface."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+import data_quality_pipeline.cli as cli_module
+from data_quality_pipeline.batch import IncomingBatch
+from data_quality_pipeline.cli import (
+    build_json_summary,
+    build_parser,
+    format_text_summary,
+    main,
+)
+from data_quality_pipeline.curated_writer import (
+    CuratedParquetWriteResult,
+)
+from data_quality_pipeline.pipeline_runner import BatchPipelineRunResult
+from data_quality_pipeline.quarantine_writer import (
+    QuarantineParquetWriteResult,
+)
+from data_quality_pipeline.validation import RecordIssue
+from data_quality_pipeline.validation_runner import BatchValidationResult
+
+
+def _issue(
+    *,
+    severity: str,
+    rule_id: str,
+) -> RecordIssue:
+    """Build one validation issue for CLI summaries."""
+    return RecordIssue(
+        source_row_number=2,
+        inspection_id="100",
+        rule_id=rule_id,
+        column="results",
+        value="UNKNOWN",
+        message="Record issue.",
+        severity=severity,
+    )
+
+
+def _run_result(
+    *,
+    duplicate_detection_skipped: bool = False,
+) -> BatchPipelineRunResult:
+    """Build complete successful-run metadata."""
+    batch = IncomingBatch(
+        path=Path("data/incoming/food_inspections_2019.csv"),
+        year=2019,
+        size_bytes=1000,
+        checksum="abc123",
+        checksum_algorithm="sha256",
+    )
+    validation = BatchValidationResult(
+        issues=(
+            _issue(
+                severity="error",
+                rule_id="invalid_result",
+            ),
+            _issue(
+                severity="warning",
+                rule_id="missing_risk",
+            ),
+        ),
+        exact_duplicates=(),
+        duplicate_detection_skipped=duplicate_detection_skipped,
+    )
+    curated_write = CuratedParquetWriteResult(
+        path=Path("data/curated/inspection_year=2019/food_inspections_2019.parquet"),
+        row_count=2,
+        size_bytes=500,
+        partition_column="inspection_year",
+        partition_value=2019,
+        compression="snappy",
+    )
+    quarantine_write = QuarantineParquetWriteResult(
+        path=Path(
+            "data/quarantine/dq_batch_year=2019/"
+            "food_inspections_2019_quarantine.parquet"
+        ),
+        row_count=1,
+        size_bytes=250,
+        partition_column="dq_batch_year",
+        partition_value=2019,
+        compression="snappy",
+    )
+
+    return BatchPipelineRunResult(
+        batch=batch,
+        validation=validation,
+        raw_row_count=3,
+        accepted_row_count=2,
+        rejected_record_count=1,
+        quarantine_issue_count=1,
+        curated_write=curated_write,
+        quarantine_write=quarantine_write,
+    )
+
+
+def test_build_parser_uses_expected_defaults() -> None:
+    """The parser should expose stable default configuration paths."""
+    arguments = build_parser().parse_args(["data/incoming/food_inspections_2019.csv"])
+
+    assert arguments.file_path == "data/incoming/food_inspections_2019.csv"
+    assert arguments.config == "config/pipeline.yaml"
+    assert arguments.contract == "config/data_contract.yaml"
+    assert not arguments.json_output
+
+
+def test_build_parser_accepts_all_overrides() -> None:
+    """Users should be able to replace configuration paths and output mode."""
+    arguments = build_parser().parse_args(
+        [
+            "incoming.csv",
+            "--config",
+            "custom/pipeline.yaml",
+            "--contract",
+            "custom/contract.yaml",
+            "--json",
+        ]
+    )
+
+    assert arguments.file_path == "incoming.csv"
+    assert arguments.config == "custom/pipeline.yaml"
+    assert arguments.contract == "custom/contract.yaml"
+    assert arguments.json_output
+
+
+def test_build_json_summary_contains_complete_run_metadata() -> None:
+    """The machine-readable summary should expose operational metadata."""
+    summary = build_json_summary(_run_result())
+
+    assert summary == {
+        "status": "success",
+        "batch": {
+            "path": "data/incoming/food_inspections_2019.csv",
+            "year": 2019,
+            "size_bytes": 1000,
+            "checksum_algorithm": "sha256",
+            "checksum": "abc123",
+        },
+        "validation": {
+            "errors": 1,
+            "warnings": 1,
+            "duplicate_detection_skipped": False,
+        },
+        "records": {
+            "raw": 3,
+            "accepted": 2,
+            "rejected": 1,
+            "quarantine_issues": 1,
+        },
+        "outputs": {
+            "curated": {
+                "path": (
+                    "data/curated/inspection_year=2019/food_inspections_2019.parquet"
+                ),
+                "rows": 2,
+                "size_bytes": 500,
+                "compression": "snappy",
+            },
+            "quarantine": {
+                "path": (
+                    "data/quarantine/dq_batch_year=2019/"
+                    "food_inspections_2019_quarantine.parquet"
+                ),
+                "rows": 1,
+                "size_bytes": 250,
+                "compression": "snappy",
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("duplicate_detection_skipped", "expected_status"),
+    [
+        (False, "Duplicate detection: completed"),
+        (True, "Duplicate detection: skipped"),
+    ],
+)
+def test_format_text_summary_reports_duplicate_detection_status(
+    duplicate_detection_skipped: bool,
+    expected_status: str,
+) -> None:
+    """The text summary should clearly report duplicate detection status."""
+    summary = format_text_summary(
+        _run_result(duplicate_detection_skipped=duplicate_detection_skipped)
+    )
+
+    assert summary.startswith("Pipeline completed successfully")
+    assert "Raw: 3" in summary
+    assert "Accepted: 2" in summary
+    assert "Rejected: 1" in summary
+    assert "Errors: 1" in summary
+    assert "Warnings: 1" in summary
+    assert expected_status in summary
+    assert "Compression: snappy" in summary
+
+
+def test_main_runs_pipeline_and_prints_text_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A successful default invocation should print readable output."""
+    captured_arguments: dict[str, object] = {}
+
+    def fake_run_batch_pipeline(
+        file_path: str,
+        *,
+        config_path: str,
+        contract_path: str,
+    ) -> BatchPipelineRunResult:
+        captured_arguments.update(
+            {
+                "file_path": file_path,
+                "config_path": config_path,
+                "contract_path": contract_path,
+            }
+        )
+        return _run_result()
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_batch_pipeline",
+        fake_run_batch_pipeline,
+    )
+
+    exit_code = main(["data/incoming/food_inspections_2019.csv"])
+    output = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_arguments == {
+        "file_path": "data/incoming/food_inspections_2019.csv",
+        "config_path": "config/pipeline.yaml",
+        "contract_path": "config/data_contract.yaml",
+    }
+    assert "Pipeline completed successfully" in output.out
+    assert "[Curated output]" in output.out
+    assert "[Quarantine output]" in output.out
+    assert output.err == ""
+
+
+def test_main_prints_valid_json_with_custom_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """JSON mode should be parseable and forward path overrides."""
+    captured_arguments: dict[str, object] = {}
+
+    def fake_run_batch_pipeline(
+        file_path: str,
+        *,
+        config_path: str,
+        contract_path: str,
+    ) -> BatchPipelineRunResult:
+        captured_arguments.update(
+            {
+                "file_path": file_path,
+                "config_path": config_path,
+                "contract_path": contract_path,
+            }
+        )
+        return _run_result()
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_batch_pipeline",
+        fake_run_batch_pipeline,
+    )
+
+    exit_code = main(
+        [
+            "incoming.csv",
+            "--config",
+            "custom/pipeline.yaml",
+            "--contract",
+            "custom/contract.yaml",
+            "--json",
+        ]
+    )
+    output = capsys.readouterr()
+    summary = json.loads(output.out)
+
+    assert exit_code == 0
+    assert captured_arguments == {
+        "file_path": "incoming.csv",
+        "config_path": "custom/pipeline.yaml",
+        "contract_path": "custom/contract.yaml",
+    }
+    assert summary["status"] == "success"
+    assert summary["batch"]["year"] == 2019
+    assert summary["records"]["raw"] == 3
+    assert summary["validation"]["errors"] == 1
+    assert output.err == ""
+
+
+def test_main_returns_one_and_reports_pipeline_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Domain failures should produce a non-zero process result."""
+
+    def fail_run_batch_pipeline(
+        _file_path: str,
+        *,
+        config_path: str,
+        contract_path: str,
+    ) -> BatchPipelineRunResult:
+        del config_path, contract_path
+        raise RuntimeError("Simulated pipeline failure.")
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_batch_pipeline",
+        fail_run_batch_pipeline,
+    )
+
+    exit_code = main(["incoming.csv"])
+    output = capsys.readouterr()
+
+    assert exit_code == 1
+    assert output.out == ""
+    assert output.err == (
+        "Pipeline failed (RuntimeError): Simulated pipeline failure.\n"
+    )
