@@ -16,10 +16,14 @@ from data_quality_pipeline.cli import (
 from data_quality_pipeline.curated_writer import (
     CuratedParquetWriteResult,
 )
-from data_quality_pipeline.pipeline_runner import BatchPipelineRunResult
+from data_quality_pipeline.pipeline_runner import (
+    BatchPipelineRunResult,
+    BatchPipelineSkipResult,
+)
 from data_quality_pipeline.quarantine_writer import (
     QuarantineParquetWriteResult,
 )
+from data_quality_pipeline.state_manifest import BatchStateManifest
 from data_quality_pipeline.validation import RecordIssue
 from data_quality_pipeline.validation_runner import BatchValidationResult
 
@@ -99,6 +103,52 @@ def _run_result(
     )
 
 
+def _skip_result() -> BatchPipelineSkipResult:
+    """Build complete metadata for an unchanged skipped batch."""
+    batch = IncomingBatch(
+        path=Path("data/incoming/food_inspections_2019.csv"),
+        year=2019,
+        size_bytes=1000,
+        checksum="abc123",
+        checksum_algorithm="sha256",
+    )
+    manifest = BatchStateManifest(
+        schema_version=1,
+        dataset="chicago_food_inspections",
+        batch_year=2019,
+        completed_at_utc="2026-07-30T08:00:00Z",
+        source_path=str(batch.path),
+        source_size_bytes=1000,
+        checksum_algorithm="sha256",
+        checksum="abc123",
+        raw_row_count=3,
+        accepted_row_count=2,
+        rejected_record_count=1,
+        quarantine_issue_count=1,
+        error_count=1,
+        warning_count=1,
+        curated_path=(
+            "data/curated/inspection_year=2019/food_inspections_2019.parquet"
+        ),
+        curated_row_count=2,
+        curated_size_bytes=500,
+        curated_compression="snappy",
+        quarantine_path=(
+            "data/quarantine/dq_batch_year=2019/"
+            "food_inspections_2019_quarantine.parquet"
+        ),
+        quarantine_row_count=1,
+        quarantine_size_bytes=250,
+        quarantine_compression="snappy",
+    )
+
+    return BatchPipelineSkipResult(
+        batch=batch,
+        manifest=manifest,
+        state_manifest_path=Path("data/state/chicago_food_inspections_2019.json"),
+    )
+
+
 def test_build_parser_uses_expected_defaults() -> None:
     """The parser should expose stable default configuration paths."""
     arguments = build_parser().parse_args(["data/incoming/food_inspections_2019.csv"])
@@ -133,7 +183,7 @@ def test_build_json_summary_contains_complete_run_metadata() -> None:
     summary = build_json_summary(_run_result())
 
     assert summary == {
-        "status": "success",
+        "status": "processed",
         "batch": {
             "path": "data/incoming/food_inspections_2019.csv",
             "year": 2019,
@@ -172,6 +222,72 @@ def test_build_json_summary_contains_complete_run_metadata() -> None:
             },
         },
     }
+
+
+def test_build_json_summary_reports_skipped_batch_state() -> None:
+    """JSON output should expose persisted metadata for skipped batches."""
+    summary = build_json_summary(_skip_result())
+
+    assert summary == {
+        "status": "skipped",
+        "reason": "batch_state_current",
+        "batch": {
+            "path": ("data/incoming/food_inspections_2019.csv"),
+            "year": 2019,
+            "size_bytes": 1000,
+            "checksum_algorithm": "sha256",
+            "checksum": "abc123",
+        },
+        "state": {
+            "manifest_path": ("data/state/chicago_food_inspections_2019.json"),
+            "completed_at_utc": ("2026-07-30T08:00:00Z"),
+        },
+        "validation": {
+            "errors": 1,
+            "warnings": 1,
+        },
+        "records": {
+            "raw": 3,
+            "accepted": 2,
+            "rejected": 1,
+            "quarantine_issues": 1,
+        },
+        "outputs": {
+            "curated": {
+                "path": (
+                    "data/curated/inspection_year=2019/food_inspections_2019.parquet"
+                ),
+                "rows": 2,
+                "size_bytes": 500,
+                "compression": "snappy",
+            },
+            "quarantine": {
+                "path": (
+                    "data/quarantine/dq_batch_year=2019/"
+                    "food_inspections_2019_quarantine.parquet"
+                ),
+                "rows": 1,
+                "size_bytes": 250,
+                "compression": "snappy",
+            },
+        },
+    }
+
+
+def test_format_text_summary_reports_skipped_batch_state() -> None:
+    """Text output should explain why an unchanged batch was skipped."""
+    summary = format_text_summary(_skip_result())
+
+    assert summary.startswith("Pipeline skipped: batch state is current")
+    assert "[State]" in summary
+    assert ("Manifest path: data/state/chicago_food_inspections_2019.json") in summary
+    assert "Completed at UTC: 2026-07-30T08:00:00Z" in summary
+    assert "Raw: 3" in summary
+    assert "Accepted: 2" in summary
+    assert "Rejected: 1" in summary
+    assert "Errors: 1" in summary
+    assert "Warnings: 1" in summary
+    assert "Compression: snappy" in summary
 
 
 @pytest.mark.parametrize(
@@ -290,7 +406,7 @@ def test_main_prints_valid_json_with_custom_paths(
         "config_path": "custom/pipeline.yaml",
         "contract_path": "custom/contract.yaml",
     }
-    assert summary["status"] == "success"
+    assert summary["status"] == "processed"
     assert summary["batch"]["year"] == 2019
     assert summary["records"]["raw"] == 3
     assert summary["validation"]["errors"] == 1

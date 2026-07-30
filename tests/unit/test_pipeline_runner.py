@@ -15,6 +15,7 @@ from data_quality_pipeline.curated_writer import (
 from data_quality_pipeline.pipeline_runner import (
     BatchPipelineRunError,
     BatchPipelineRunResult,
+    BatchPipelineSkipResult,
     _rejected_source_positions,
     _select_accepted_records,
     _validate_run_counts,
@@ -22,6 +23,10 @@ from data_quality_pipeline.pipeline_runner import (
 )
 from data_quality_pipeline.quarantine_writer import (
     QuarantineParquetWriteResult,
+)
+from data_quality_pipeline.state_manifest import (
+    BatchStateManifest,
+    BatchStateWriteResult,
 )
 from data_quality_pipeline.validation import RecordIssue
 from data_quality_pipeline.validation_runner import (
@@ -97,6 +102,34 @@ def _quarantine_write_result() -> QuarantineParquetWriteResult:
     )
 
 
+def _state_manifest() -> BatchStateManifest:
+    """Build valid persisted state for runner tests."""
+    return BatchStateManifest(
+        schema_version=1,
+        dataset="chicago_food_inspections",
+        batch_year=2019,
+        completed_at_utc="2026-07-30T08:00:00Z",
+        source_path=("data/incoming/food_inspections_2019.csv"),
+        source_size_bytes=123,
+        checksum_algorithm="sha256",
+        checksum="abc123",
+        raw_row_count=3,
+        accepted_row_count=2,
+        rejected_record_count=1,
+        quarantine_issue_count=1,
+        error_count=1,
+        warning_count=1,
+        curated_path=str(_curated_write_result().path),
+        curated_row_count=2,
+        curated_size_bytes=500,
+        curated_compression="snappy",
+        quarantine_path=str(_quarantine_write_result().path),
+        quarantine_row_count=1,
+        quarantine_size_bytes=250,
+        quarantine_compression="snappy",
+    )
+
+
 def test_batch_pipeline_run_result_is_immutable_and_counts_issues() -> None:
     """Run metadata should expose stable error and warning counts."""
     validation = _validation_result(
@@ -134,6 +167,7 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
     """The runner should connect all components with correct arguments."""
     config = {
         "source": {
+            "dataset": "chicago_food_inspections",
             "start_year": 2019,
             "end_year": 2025,
         },
@@ -150,6 +184,7 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         "paths": {
             "curated": "data/curated",
             "quarantine": "data/quarantine",
+            "state": "data/state",
         },
     }
     contract = {
@@ -164,6 +199,7 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         },
     }
     batch = _batch()
+    state_manifest = _state_manifest()
     raw = pd.DataFrame(
         {
             "inspection_id": pd.Series(
@@ -240,6 +276,31 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         )
         return batch
 
+    def fake_read_state(
+        output_dir: str | Path,
+        *,
+        dataset: str,
+        batch_year: int,
+    ) -> BatchStateManifest:
+        call_order.append("read_state")
+        captured["state_read"] = (
+            output_dir,
+            dataset,
+            batch_year,
+        )
+        return state_manifest
+
+    def fake_is_current(
+        incoming_batch: IncomingBatch,
+        manifest: BatchStateManifest,
+    ) -> bool:
+        call_order.append("is_current")
+        captured["state_current"] = (
+            incoming_batch,
+            manifest,
+        )
+        return False
+
     def fake_read(
         incoming_batch: IncomingBatch,
         *,
@@ -312,6 +373,33 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         captured["curated_write"] = kwargs
         return _curated_write_result()
 
+    def fake_build_state(
+        run_result: BatchPipelineRunResult,
+        *,
+        dataset: str,
+    ) -> BatchStateManifest:
+        call_order.append("build_state")
+        captured["state_build"] = (
+            run_result,
+            dataset,
+        )
+        return state_manifest
+
+    def fake_write_state(
+        manifest: BatchStateManifest,
+        *,
+        output_dir: str | Path,
+    ) -> BatchStateWriteResult:
+        call_order.append("write_state")
+        captured["state_write"] = (
+            manifest,
+            output_dir,
+        )
+        return BatchStateWriteResult(
+            path=Path("data/state/chicago_food_inspections_2019.json"),
+            size_bytes=1000,
+        )
+
     monkeypatch.setattr(
         pipeline_runner_module,
         "load_config",
@@ -326,6 +414,16 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         pipeline_runner_module,
         "inspect_incoming_batch",
         fake_inspect,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "read_batch_state_manifest",
+        fake_read_state,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "is_batch_state_current",
+        fake_is_current,
     )
     monkeypatch.setattr(
         pipeline_runner_module,
@@ -357,6 +455,16 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         "write_curated_parquet",
         fake_write_curated,
     )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "build_batch_state_manifest",
+        fake_build_state,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "write_batch_state_manifest",
+        fake_write_state,
+    )
 
     result = run_batch_pipeline(
         "incoming.csv",
@@ -368,12 +476,16 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         "load_config",
         "load_contract",
         "inspect",
+        "read_state",
+        "is_current",
         "read",
         "validate",
         "build_quarantine",
         "transform",
         "write_quarantine",
         "write_curated",
+        "build_state",
+        "write_state",
     ]
     assert captured["config_path"] == "custom/pipeline.yaml"
     assert captured["contract_path"] == "custom/contract.yaml"
@@ -382,6 +494,15 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         2019,
         2025,
         "sha256",
+    )
+    assert captured["state_read"] == (
+        "data/state",
+        "chicago_food_inspections",
+        2019,
+    )
+    assert captured["state_current"] == (
+        batch,
+        state_manifest,
     )
     assert captured["read"] == (
         batch,
@@ -415,6 +536,15 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
         "partition_by": ["inspection_year"],
     }
 
+    assert captured["state_build"] == (
+        result,
+        "chicago_food_inspections",
+    )
+    assert captured["state_write"] == (
+        state_manifest,
+        "data/state",
+    )
+
     assert result.batch is batch
     assert result.validation is validation
     assert result.raw_row_count == 3
@@ -423,6 +553,90 @@ def test_run_batch_pipeline_orchestrates_complete_batch(
     assert result.quarantine_issue_count == 1
     assert result.error_count == 1
     assert result.warning_count == 1
+
+
+def test_run_batch_pipeline_skips_current_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current source state should bypass CSV processing."""
+    config = {
+        "source": {
+            "dataset": "chicago_food_inspections",
+            "start_year": 2019,
+            "end_year": 2025,
+        },
+        "ingestion": {
+            "encoding": "utf-8",
+            "delimiter": ",",
+            "hash_algorithm": "sha256",
+        },
+        "output": {},
+        "paths": {
+            "state": "data/state",
+        },
+    }
+    contract = {
+        "contract": {
+            "primary_key": "inspection_id",
+        },
+        "source_schema": {
+            "expected_columns": ["inspection_id"],
+        },
+    }
+    batch = _batch()
+    manifest = _state_manifest()
+
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "load_config",
+        lambda _path: config,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "load_data_contract",
+        lambda _path: contract,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "inspect_incoming_batch",
+        lambda *_args, **_kwargs: batch,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "read_batch_state_manifest",
+        lambda *_args, **_kwargs: manifest,
+    )
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "is_batch_state_current",
+        lambda incoming_batch, existing_manifest: (
+            incoming_batch is batch and existing_manifest is manifest
+        ),
+    )
+
+    def fail_unexpected_read(
+        *_args: object,
+        **_kwargs: object,
+    ) -> pd.DataFrame:
+        raise AssertionError("Current batch must not be read or processed.")
+
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "read_raw_batch",
+        fail_unexpected_read,
+    )
+
+    result = run_batch_pipeline("incoming.csv")
+
+    assert isinstance(result, BatchPipelineSkipResult)
+    assert result.batch is batch
+    assert result.manifest is manifest
+    assert result.state_manifest_path == Path(
+        "data/state/chicago_food_inspections_2019.json"
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        result.state_manifest_path = Path("changed.json")
 
 
 def test_rejected_source_positions_deduplicates_multiple_errors() -> None:

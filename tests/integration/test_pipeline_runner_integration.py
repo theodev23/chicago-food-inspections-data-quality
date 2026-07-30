@@ -6,7 +6,11 @@ import pandas as pd
 import pyarrow.parquet as pq
 import yaml
 
-from data_quality_pipeline.pipeline_runner import run_batch_pipeline
+from data_quality_pipeline.pipeline_runner import (
+    BatchPipelineRunResult,
+    BatchPipelineSkipResult,
+    run_batch_pipeline,
+)
 
 SOURCE_COLUMNS = [
     "inspection_id",
@@ -93,6 +97,7 @@ def test_run_batch_pipeline_publishes_curated_and_quarantine_outputs(
     )
     config["paths"]["curated"] = str(tmp_path / "curated")
     config["paths"]["quarantine"] = str(tmp_path / "quarantine")
+    config["paths"]["state"] = str(tmp_path / "state")
 
     config_path = tmp_path / "pipeline.yaml"
     config_path.write_text(
@@ -109,6 +114,7 @@ def test_run_batch_pipeline_publishes_curated_and_quarantine_outputs(
         contract_path="config/data_contract.yaml",
     )
 
+    assert isinstance(result, BatchPipelineRunResult)
     assert result.batch.year == 2019
     assert result.raw_row_count == 3
     assert result.accepted_row_count == 2
@@ -156,15 +162,26 @@ def test_run_batch_pipeline_publishes_curated_and_quarantine_outputs(
         == "SNAPPY"
     )
 
+    state_path = tmp_path / "state" / "chicago_food_inspections_2019.json"
+    assert state_path.is_file()
+
     rerun = run_batch_pipeline(
         source_path,
         config_path=config_path,
         contract_path="config/data_contract.yaml",
     )
 
-    assert rerun.curated_write.path == result.curated_write.path
-    assert rerun.quarantine_write.path == result.quarantine_write.path
-    assert rerun.curated_write.row_count == 2
-    assert rerun.quarantine_write.row_count == 1
+    assert isinstance(rerun, BatchPipelineSkipResult)
+    assert rerun.batch == result.batch
+    assert rerun.state_manifest_path == state_path
+    assert rerun.manifest.batch_year == 2019
+    assert rerun.manifest.raw_row_count == 3
+    assert rerun.manifest.accepted_row_count == 2
+    assert rerun.manifest.rejected_record_count == 1
+    assert rerun.manifest.quarantine_issue_count == 1
+    assert rerun.manifest.curated_row_count == 2
+    assert rerun.manifest.quarantine_row_count == 1
+    assert rerun.manifest.curated_path == str(result.curated_write.path.resolve())
+    assert rerun.manifest.quarantine_path == str(result.quarantine_write.path.resolve())
 
     assert not list(tmp_path.rglob("*.tmp"))
