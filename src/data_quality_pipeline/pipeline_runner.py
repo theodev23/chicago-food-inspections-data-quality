@@ -21,6 +21,14 @@ from data_quality_pipeline.quarantine_writer import (
     QuarantineParquetWriteResult,
     write_quarantine_parquet,
 )
+from data_quality_pipeline.state_manifest import (
+    BatchStateManifest,
+    batch_state_manifest_path,
+    build_batch_state_manifest,
+    is_batch_state_current,
+    read_batch_state_manifest,
+    write_batch_state_manifest,
+)
 from data_quality_pipeline.transformation import (
     transform_curated_records,
 )
@@ -54,6 +62,18 @@ class BatchPipelineRunResult:
         return len(self.validation.warnings)
 
 
+@dataclass(frozen=True, slots=True)
+class BatchPipelineSkipResult:
+    """Describe one unchanged annual batch skipped from processing."""
+
+    batch: IncomingBatch
+    manifest: BatchStateManifest
+    state_manifest_path: Path
+
+
+type BatchPipelineResult = BatchPipelineRunResult | BatchPipelineSkipResult
+
+
 class BatchPipelineRunError(Exception):
     """Raised when pipeline orchestration detects inconsistent state."""
 
@@ -63,19 +83,21 @@ def run_batch_pipeline(
     *,
     config_path: str | Path = "config/pipeline.yaml",
     contract_path: str | Path = "config/data_contract.yaml",
-) -> BatchPipelineRunResult:
-    """Run the complete data-quality pipeline for one annual CSV batch.
+) -> BatchPipelineResult:
+    """Run the incremental data-quality pipeline for one annual CSV batch.
 
     The execution order is:
 
     1. Load configuration and data contract.
     2. Inspect and checksum the incoming file.
-    3. Read the raw CSV with its exact source schema.
-    4. Validate every source record.
-    5. Build issue-level quarantine records.
-    6. Remove source rows having at least one blocking error.
-    7. Transform accepted records to the curated schema.
-    8. Persist quarantine and curated Parquet outputs.
+    3. Return a skip result when persisted state is still current.
+    4. Read the raw CSV with its exact source schema.
+    5. Validate every source record.
+    6. Build issue-level quarantine records.
+    7. Remove source rows having at least one blocking error.
+    8. Transform accepted records to the curated schema.
+    9. Persist quarantine and curated Parquet outputs.
+    10. Persist the successful batch state manifest.
 
     Args:
         file_path: Annual incoming CSV file.
@@ -83,7 +105,7 @@ def run_batch_pipeline(
         contract_path: Data-contract configuration file.
 
     Returns:
-        Immutable metadata and validation results for the completed run.
+        Immutable metadata for either a processed or skipped annual batch.
 
     Raises:
         BatchPipelineRunError: If internal row counts or issue mappings
@@ -98,6 +120,7 @@ def run_batch_pipeline(
     ingestion_config = config["ingestion"]
     output_config = config["output"]
     paths_config = config["paths"]
+    dataset = source_config["dataset"]
 
     expected_columns = contract["source_schema"]["expected_columns"]
     primary_key = contract["contract"]["primary_key"]
@@ -108,6 +131,25 @@ def run_batch_pipeline(
         end_year=source_config["end_year"],
         hash_algorithm=ingestion_config["hash_algorithm"],
     )
+
+    existing_manifest = read_batch_state_manifest(
+        paths_config["state"],
+        dataset=dataset,
+        batch_year=batch.year,
+    )
+
+    if existing_manifest is not None and is_batch_state_current(
+        batch, existing_manifest
+    ):
+        return BatchPipelineSkipResult(
+            batch=batch,
+            manifest=existing_manifest,
+            state_manifest_path=batch_state_manifest_path(
+                paths_config["state"],
+                dataset=dataset,
+                batch_year=batch.year,
+            ),
+        )
 
     raw = read_raw_batch(
         batch,
@@ -169,7 +211,7 @@ def run_batch_pipeline(
         partition_by=output_config["partition_by"],
     )
 
-    return BatchPipelineRunResult(
+    result = BatchPipelineRunResult(
         batch=batch,
         validation=validation,
         raw_row_count=len(raw),
@@ -179,6 +221,17 @@ def run_batch_pipeline(
         curated_write=curated_write,
         quarantine_write=quarantine_write,
     )
+
+    manifest = build_batch_state_manifest(
+        result,
+        dataset=dataset,
+    )
+    write_batch_state_manifest(
+        manifest,
+        output_dir=paths_config["state"],
+    )
+
+    return result
 
 
 def _rejected_source_positions(

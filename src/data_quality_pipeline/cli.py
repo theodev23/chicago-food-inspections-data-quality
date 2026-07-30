@@ -7,7 +7,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from data_quality_pipeline.pipeline_runner import (
+    BatchPipelineResult,
     BatchPipelineRunResult,
+    BatchPipelineSkipResult,
     run_batch_pipeline,
 )
 
@@ -77,11 +79,54 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def build_json_summary(
-    result: BatchPipelineRunResult,
+    result: BatchPipelineResult,
 ) -> dict[str, Any]:
-    """Build a machine-readable successful-run summary."""
+    """Build a machine-readable pipeline-result summary."""
+    if isinstance(result, BatchPipelineSkipResult):
+        manifest = result.manifest
+
+        return {
+            "status": "skipped",
+            "reason": "batch_state_current",
+            "batch": {
+                "path": str(result.batch.path),
+                "year": result.batch.year,
+                "size_bytes": result.batch.size_bytes,
+                "checksum_algorithm": (result.batch.checksum_algorithm),
+                "checksum": result.batch.checksum,
+            },
+            "state": {
+                "manifest_path": str(result.state_manifest_path),
+                "completed_at_utc": (manifest.completed_at_utc),
+            },
+            "validation": {
+                "errors": manifest.error_count,
+                "warnings": manifest.warning_count,
+            },
+            "records": {
+                "raw": manifest.raw_row_count,
+                "accepted": manifest.accepted_row_count,
+                "rejected": manifest.rejected_record_count,
+                "quarantine_issues": (manifest.quarantine_issue_count),
+            },
+            "outputs": {
+                "curated": {
+                    "path": manifest.curated_path,
+                    "rows": manifest.curated_row_count,
+                    "size_bytes": (manifest.curated_size_bytes),
+                    "compression": (manifest.curated_compression),
+                },
+                "quarantine": {
+                    "path": manifest.quarantine_path,
+                    "rows": manifest.quarantine_row_count,
+                    "size_bytes": (manifest.quarantine_size_bytes),
+                    "compression": (manifest.quarantine_compression),
+                },
+            },
+        }
+
     return {
-        "status": "success",
+        "status": "processed",
         "batch": {
             "path": str(result.batch.path),
             "year": result.batch.year,
@@ -120,9 +165,57 @@ def build_json_summary(
 
 
 def format_text_summary(
+    result: BatchPipelineResult,
+) -> str:
+    """Format a readable pipeline-result summary."""
+    if isinstance(result, BatchPipelineSkipResult):
+        manifest = result.manifest
+
+        lines = [
+            "Pipeline skipped: batch state is current",
+            "",
+            "[Batch]",
+            f"Path: {result.batch.path}",
+            f"Year: {result.batch.year}",
+            f"Size bytes: {result.batch.size_bytes}",
+            (f"Checksum ({result.batch.checksum_algorithm}): {result.batch.checksum}"),
+            "",
+            "[State]",
+            f"Manifest path: {result.state_manifest_path}",
+            f"Completed at UTC: {manifest.completed_at_utc}",
+            "",
+            "[Records]",
+            f"Raw: {manifest.raw_row_count}",
+            f"Accepted: {manifest.accepted_row_count}",
+            f"Rejected: {manifest.rejected_record_count}",
+            (f"Quarantine issues: {manifest.quarantine_issue_count}"),
+            "",
+            "[Validation]",
+            f"Errors: {manifest.error_count}",
+            f"Warnings: {manifest.warning_count}",
+            "",
+            "[Curated output]",
+            f"Path: {manifest.curated_path}",
+            f"Rows: {manifest.curated_row_count}",
+            f"Size bytes: {manifest.curated_size_bytes}",
+            f"Compression: {manifest.curated_compression}",
+            "",
+            "[Quarantine output]",
+            f"Path: {manifest.quarantine_path}",
+            f"Rows: {manifest.quarantine_row_count}",
+            f"Size bytes: {manifest.quarantine_size_bytes}",
+            f"Compression: {manifest.quarantine_compression}",
+        ]
+
+        return "\n".join(lines)
+
+    return _format_processed_text_summary(result)
+
+
+def _format_processed_text_summary(
     result: BatchPipelineRunResult,
 ) -> str:
-    """Format a readable successful-run summary."""
+    """Format a readable summary for a processed annual batch."""
     duplicate_status = (
         "skipped" if result.validation.duplicate_detection_skipped else "completed"
     )
