@@ -6,6 +6,10 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+from data_quality_pipeline.multi_batch_runner import (
+    MultiBatchPipelineResult,
+    run_discovered_batches,
+)
 from data_quality_pipeline.pipeline_runner import (
     BatchPipelineResult,
     BatchPipelineRunResult,
@@ -20,12 +24,20 @@ def build_parser() -> argparse.ArgumentParser:
         prog="food-inspections-pipeline",
         description=(
             "Validate, transform, and publish one annual Chicago "
-            "food-inspections CSV batch."
+            "food-inspections CSV batch or all configured incoming "
+            "batches."
         ),
     )
     parser.add_argument(
         "file_path",
-        help="Path to the annual incoming CSV file.",
+        nargs="?",
+        help=("Path to one annual incoming CSV file. Omit when using --all."),
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_batches",
+        help=("Discover and execute all configured incoming annual batches."),
     )
     parser.add_argument(
         "--config",
@@ -51,12 +63,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
 
+    if arguments.all_batches and arguments.file_path is not None:
+        parser.error("file_path cannot be used together with --all.")
+
+    if not arguments.all_batches and arguments.file_path is None:
+        parser.error("file_path is required unless --all is used.")
+
     try:
-        result = run_batch_pipeline(
-            arguments.file_path,
-            config_path=arguments.config,
-            contract_path=arguments.contract,
-        )
+        if arguments.all_batches:
+            multi_result = run_discovered_batches(
+                config_path=arguments.config,
+                contract_path=arguments.contract,
+            )
+        else:
+            batch_result = run_batch_pipeline(
+                arguments.file_path,
+                config_path=arguments.config,
+                contract_path=arguments.contract,
+            )
     except Exception as exc:
         print(
             f"Pipeline failed ({type(exc).__name__}): {exc}",
@@ -64,18 +88,81 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    if arguments.json_output:
+    if arguments.all_batches:
+        if arguments.json_output:
+            print(
+                json.dumps(
+                    build_multi_batch_json_summary(multi_result),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            print(format_multi_batch_text_summary(multi_result))
+    elif arguments.json_output:
         print(
             json.dumps(
-                build_json_summary(result),
+                build_json_summary(batch_result),
                 indent=2,
                 sort_keys=True,
             )
         )
     else:
-        print(format_text_summary(result))
+        print(format_text_summary(batch_result))
 
     return 0
+
+
+def build_multi_batch_json_summary(
+    result: MultiBatchPipelineResult,
+) -> dict[str, Any]:
+    """Build a machine-readable multi-batch execution summary."""
+    return {
+        "status": "success",
+        "mode": "all",
+        "summary": {
+            "discovered": result.discovered_count,
+            "processed": result.processed_count,
+            "skipped": result.skipped_count,
+        },
+        "batches": [
+            build_json_summary(batch_result) for batch_result in result.results
+        ],
+    }
+
+
+def format_multi_batch_text_summary(
+    result: MultiBatchPipelineResult,
+) -> str:
+    """Format a readable multi-batch execution summary."""
+    lines = [
+        "Multi-batch pipeline completed successfully",
+        "",
+        "[Summary]",
+        f"Discovered: {result.discovered_count}",
+        f"Processed: {result.processed_count}",
+        f"Skipped: {result.skipped_count}",
+        "",
+        "[Batches]",
+    ]
+
+    if not result.results:
+        lines.append("No incoming batches discovered.")
+    else:
+        for batch_result in result.results:
+            status = (
+                "processed"
+                if isinstance(
+                    batch_result,
+                    BatchPipelineRunResult,
+                )
+                else "skipped"
+            )
+            lines.append(
+                f"{batch_result.batch.year}: {status} - {batch_result.batch.path}"
+            )
+
+    return "\n".join(lines)
 
 
 def build_json_summary(
