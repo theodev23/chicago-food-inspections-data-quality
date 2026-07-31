@@ -27,6 +27,7 @@ publishing, incremental execution, automated tests, and continuous integration.
 - [Testing and continuous integration](#testing-and-continuous-integration)
 - [Design decisions](#design-decisions)
 - [Current scope](#current-scope)
+- [License](#license)
 
 ## Project overview
 
@@ -881,3 +882,7 @@ points for future iterations.
 The repository currently includes a verified 2019 reference run. The pipeline
 configuration supports annual input batches from 2019 through 2025 when the
 corresponding source files are supplied locally.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

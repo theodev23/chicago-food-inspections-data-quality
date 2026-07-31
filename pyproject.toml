@@ -7,6 +7,8 @@ name = "chicago-food-inspections-data-quality"
 version = "0.1.0"
 description = "An incremental Python ETL pipeline for profiling, cleaning, validating, and publishing Chicago food inspection data."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 authors = [
     { name = "Théo Devarenne" }
