@@ -48,3 +48,5 @@ data/state/*
 build/
 dist/
 *.egg-info/
+# Runnable demo artifacts
+.demo_runtime/

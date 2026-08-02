@@ -13,6 +13,7 @@ publishing, incremental execution, automated tests, and continuous integration.
 ## Table of contents
 
 - [Project overview](#project-overview)
+- [Runnable demo](#runnable-demo)
 - [Key engineering capabilities](#key-engineering-capabilities)
 - [Architecture](#architecture)
 - [Data source](#data-source)
@@ -49,6 +50,37 @@ For every incoming batch, it:
 
 The project is configured for annual batches from 2019 through 2025. Source
 CSV files and generated outputs are intentionally excluded from the repository.
+
+
+## Runnable demo
+
+A self-contained synthetic batch is included so the complete pipeline can be
+evaluated without downloading the external Chicago dataset.
+
+After creating the virtual environment and installing the project, run:
+
+    ./scripts/run_demo.sh
+
+The runner invokes the real project CLI twice. The first execution validates,
+transforms, quarantines, and publishes the batch. The second execution confirms
+that the unchanged batch is skipped and that existing outputs are not
+rewritten.
+
+| Result | Count |
+|---|---:|
+| Raw records | 7 |
+| Accepted records | 5 |
+| Rejected records | 2 |
+| Blocking errors | 2 |
+| Non-blocking warnings | 2 |
+| Quarantine issues | 2 |
+
+The demonstration also verifies curated identifiers, nullable warning
+transformations, quarantine rule identifiers, duplicate lineage, state
+manifest counts, and output timestamps.
+
+See [the runnable demo documentation](demo/README.md) for the synthetic
+scenarios, generated artifacts, and dedicated integration test.
 
 ## Key engineering capabilities
 
@@ -405,6 +437,7 @@ Example summary for the current local input directory:
 │       └── ci.yaml
 ├── config/
 │   ├── data_contract.yaml
+│   ├── demo_pipeline.yaml
 │   └── pipeline.yaml
 ├── data/
 │   ├── archive/
@@ -413,9 +446,16 @@ Example summary for the current local input directory:
 │   ├── quarantine/
 │   ├── reports/
 │   └── state/
+├── demo/
+│   ├── input/
+│   │   └── food_inspections_2019.csv
+│   ├── README.md
+│   └── expected_summary.json
 ├── docs/
 ├── logs/
 ├── scripts/
+│   ├── run_demo.py
+│   └── run_demo.sh
 ├── src/
 │   └── data_quality_pipeline/
 │       ├── __init__.py
@@ -436,6 +476,7 @@ Example summary for the current local input directory:
 │       └── validation_runner.py
 ├── tests/
 │   ├── integration/
+│   │   └── test_demo_script.py
 │   └── unit/
 ├── .gitignore
 ├── pyproject.toml
@@ -643,7 +684,7 @@ python -m pytest
 Current reference result:
 
 ```text
-338 passed
+339 passed
 ```
 
 The test suite covers:
@@ -673,12 +714,15 @@ The test suite covers:
 - multi-batch discovery and execution;
 - command-line parsing and JSON summaries.
 
-An integration test verifies the complete incremental lifecycle:
+The integration tests verify:
 
-1. publish curated, quarantine, and state outputs for a new batch;
-2. execute the same unchanged batch again;
-3. confirm that the second run returns `skipped`;
-4. confirm that existing outputs are not rewritten.
+1. the complete incremental lifecycle for a new annual batch;
+2. publication of curated, quarantine, and state outputs;
+3. skip behavior for an unchanged second execution;
+4. protection against output rewrites during a skipped execution;
+5. execution of the self-contained demo from an external working
+   directory;
+6. validation and cleanup of all generated demo artifacts.
 
 ### Run Ruff checks
 

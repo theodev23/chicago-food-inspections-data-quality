@@ -1,0 +1,54 @@
+{
+  "batch_year": 2019,
+  "first_run": {
+    "status": "processed",
+    "summary": {
+      "discovered": 1,
+      "processed": 1,
+      "skipped": 0
+    },
+    "records": {
+      "raw": 7,
+      "accepted": 5,
+      "rejected": 2,
+      "quarantine_issues": 2
+    },
+    "validation": {
+      "errors": 2,
+      "warnings": 2,
+      "duplicate_detection_skipped": false
+    }
+  },
+  "curated_inspection_ids": [
+    1001,
+    1002,
+    1003,
+    1004,
+    1006
+  ],
+  "null_transformations": {
+    "license_number_inspection_id": 1003,
+    "risk_inspection_id": 1004
+  },
+  "quarantine": [
+    {
+      "inspection_id": "1005",
+      "rule_id": "coordinate_pair_consistency",
+      "duplicate_of_inspection_id": null
+    },
+    {
+      "inspection_id": "1007",
+      "rule_id": "exact_duplicate_record",
+      "duplicate_of_inspection_id": "1006"
+    }
+  ],
+  "second_run": {
+    "status": "skipped",
+    "reason": "batch_state_current",
+    "summary": {
+      "discovered": 1,
+      "processed": 0,
+      "skipped": 1
+    }
+  }
+}

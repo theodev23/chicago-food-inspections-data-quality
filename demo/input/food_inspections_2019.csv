@@ -1,0 +1,8 @@
+inspection_id,dba_name,aka_name,license_,facility_type,risk,address,city,state,zip,inspection_date,inspection_type,results,violations,latitude,longitude,location
+1001,Lakeview Cafe,Lakeview Cafe,200001,Restaurant,Risk 1 (High),100 N State St,Chicago,IL,60601,2019-01-10T10:30:00.000,Canvass,Pass,,41.885000,-87.627000,"(41.885000, -87.627000)"
+1002,South Loop Market,South Loop Market,200002,Grocery Store,Risk 2 (Medium),200 S Wabash Ave,Chicago,IL,60604,2019-02-14T09:15:00.000,Canvass,Pass w/ Conditions,,41.879000,-87.626000,"(41.879000, -87.626000)"
+1003,West Town Bakery,West Town Bakery,0,Bakery,Risk 1 (High),300 W Chicago Ave,Chicago,IL,60654,2019-03-20T11:45:00.000,License,Pass,,41.896000,-87.636000,"(41.896000, -87.636000)"
+1004,Lincoln Park Deli,Lincoln Park Deli,200004,Restaurant,,400 W Fullerton Pkwy,Chicago,IL,60614,2019-04-05T13:00:00.000,Canvass,Pass,,,,
+1005,River North Grill,River North Grill,200005,Restaurant,Risk 1 (High),500 N Clark St,Chicago,IL,60654,2019-05-18T14:30:00.000,Complaint,Fail,,41.891000,,
+1006,Hyde Park Kitchen,Hyde Park Kitchen,200006,Restaurant,Risk 1 (High),600 E 55th St,Chicago,IL,60615,2019-06-22T08:45:00.000,Canvass,Pass,,41.795000,-87.610000,"(41.795000, -87.610000)"
+1007,Hyde Park Kitchen,Hyde Park Kitchen,200006,Restaurant,Risk 1 (High),600 E 55th St,Chicago,IL,60615,2019-06-22T08:45:00.000,Canvass,Pass,,41.795000,-87.610000,"(41.795000, -87.610000)"
