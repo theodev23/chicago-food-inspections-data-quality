@@ -1,0 +1,28 @@
+project:
+  name: chicago-food-inspections-data-quality-demo
+
+source:
+  dataset: chicago_food_inspections_demo
+  start_year: 2019
+  end_year: 2019
+
+paths:
+  incoming: .demo_runtime/incoming
+  archive: .demo_runtime/archive
+  curated: .demo_runtime/curated
+  quarantine: .demo_runtime/quarantine
+  reports: .demo_runtime/reports
+  state: .demo_runtime/state
+  logs: .demo_runtime/logs
+
+ingestion:
+  file_pattern: "food_inspections_*.csv"
+  encoding: utf-8
+  delimiter: ","
+  hash_algorithm: sha256
+
+output:
+  format: parquet
+  compression: snappy
+  partition_by:
+    - inspection_year
